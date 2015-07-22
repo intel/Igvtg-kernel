@@ -17,7 +17,7 @@ DOCBOOKS := z8530book.xml device-drivers.xml \
 	    tracepoint.xml drm.xml media_api.xml w1.xml \
 	    writing_musb_glue_layer.xml crypto-API.xml
 
-MARKDOWNREADY := 
+MARKDOWNREADY := drm.xml
 
 include Documentation/DocBook/media/Makefile
 
