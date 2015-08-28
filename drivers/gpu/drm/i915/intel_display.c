@@ -1061,54 +1061,6 @@ static void intel_wait_for_pipe_off(struct intel_crtc *crtc)
 	}
 }
 
-/*
- * ibx_digital_port_connected - is the specified port connected?
- * @dev_priv: i915 private structure
- * @port: the port to test
- *
- * Returns true if @port is connected, false otherwise.
- */
-bool ibx_digital_port_connected(struct drm_i915_private *dev_priv,
-				struct intel_digital_port *port)
-{
-	u32 bit;
-
-	if (HAS_PCH_IBX(dev_priv->dev)) {
-		switch (port->port) {
-		case PORT_B:
-			bit = SDE_PORTB_HOTPLUG;
-			break;
-		case PORT_C:
-			bit = SDE_PORTC_HOTPLUG;
-			break;
-		case PORT_D:
-			bit = SDE_PORTD_HOTPLUG;
-			break;
-		default:
-			return true;
-		}
-	} else {
-		switch (port->port) {
-		case PORT_B:
-			bit = SDE_PORTB_HOTPLUG_CPT;
-			break;
-		case PORT_C:
-			bit = SDE_PORTC_HOTPLUG_CPT;
-			break;
-		case PORT_D:
-			bit = SDE_PORTD_HOTPLUG_CPT;
-			break;
-		case PORT_E:
-			bit = SDE_PORTE_HOTPLUG_SPT;
-			break;
-		default:
-			return true;
-		}
-	}
-
-	return I915_READ(SDEISR) & bit;
-}
-
 static const char *state_string(bool enabled)
 {
 	return enabled ? "on" : "off";
@@ -1585,26 +1537,6 @@ static void assert_pch_ports_disabled(struct drm_i915_private *dev_priv,
 	assert_pch_hdmi_disabled(dev_priv, pipe, PCH_HDMID);
 }
 
-static void intel_init_dpio(struct drm_device *dev)
-{
-	struct drm_i915_private *dev_priv = dev->dev_private;
-
-	if (!IS_VALLEYVIEW(dev))
-		return;
-
-	/*
-	 * IOSF_PORT_DPIO is used for VLV x2 PHY (DP/HDMI B and C),
-	 * CHV x1 PHY (DP/HDMI D)
-	 * IOSF_PORT_DPIO_2 is used for CHV x2 PHY (DP/HDMI B and C)
-	 */
-	if (IS_CHERRYVIEW(dev)) {
-		DPIO_PHY_IOSF_PORT(DPIO_PHY0) = IOSF_PORT_DPIO_2;
-		DPIO_PHY_IOSF_PORT(DPIO_PHY1) = IOSF_PORT_DPIO;
-	} else {
-		DPIO_PHY_IOSF_PORT(DPIO_PHY0) = IOSF_PORT_DPIO;
-	}
-}
-
 static void vlv_enable_pll(struct intel_crtc *crtc,
 			   const struct intel_crtc_state *pipe_config)
 {
@@ -1830,17 +1762,6 @@ static void chv_disable_pll(struct drm_i915_private *dev_priv, enum pipe pipe)
 	val = vlv_dpio_read(dev_priv, pipe, CHV_CMN_DW14(port));
 	val &= ~DPIO_DCLKP_EN;
 	vlv_dpio_write(dev_priv, pipe, CHV_CMN_DW14(port), val);
-
-	/* disable left/right clock distribution */
-	if (pipe != PIPE_B) {
-		val = vlv_dpio_read(dev_priv, pipe, _CHV_CMN_DW5_CH0);
-		val &= ~(CHV_BUFLEFTENA1_MASK | CHV_BUFRIGHTENA1_MASK);
-		vlv_dpio_write(dev_priv, pipe, _CHV_CMN_DW5_CH0, val);
-	} else {
-		val = vlv_dpio_read(dev_priv, pipe, _CHV_CMN_DW1_CH1);
-		val &= ~(CHV_BUFLEFTENA2_MASK | CHV_BUFRIGHTENA2_MASK);
-		vlv_dpio_write(dev_priv, pipe, _CHV_CMN_DW1_CH1, val);
-	}
 
 	mutex_unlock(&dev_priv->sb_lock);
 }
@@ -2936,8 +2857,6 @@ static void skl_detach_scaler(struct intel_crtc *intel_crtc, int id)
 	I915_WRITE(SKL_PS_CTRL(intel_crtc->pipe, id), 0);
 	I915_WRITE(SKL_PS_WIN_POS(intel_crtc->pipe, id), 0);
 	I915_WRITE(SKL_PS_WIN_SZ(intel_crtc->pipe, id), 0);
-	DRM_DEBUG_KMS("CRTC:%d Disabled scaler id %u.%u\n",
-		intel_crtc->base.base.id, intel_crtc->pipe, id);
 }
 
 /*
@@ -5276,6 +5195,21 @@ static void modeset_update_crtc_power_domains(struct drm_atomic_state *state)
 			modeset_put_power_domains(dev_priv, put_domains[i]);
 }
 
+static int intel_compute_max_dotclk(struct drm_i915_private *dev_priv)
+{
+	int max_cdclk_freq = dev_priv->max_cdclk_freq;
+
+	if (INTEL_INFO(dev_priv)->gen >= 9 ||
+	    IS_HASWELL(dev_priv) || IS_BROADWELL(dev_priv))
+		return max_cdclk_freq;
+	else if (IS_CHERRYVIEW(dev_priv))
+		return max_cdclk_freq*95/100;
+	else if (INTEL_INFO(dev_priv)->gen < 4)
+		return 2*max_cdclk_freq*90/100;
+	else
+		return max_cdclk_freq*90/100;
+}
+
 static void intel_update_max_cdclk(struct drm_device *dev)
 {
 	struct drm_i915_private *dev_priv = dev->dev_private;
@@ -5315,8 +5249,13 @@ static void intel_update_max_cdclk(struct drm_device *dev)
 		dev_priv->max_cdclk_freq = dev_priv->cdclk_freq;
 	}
 
+	dev_priv->max_dotclk_freq = intel_compute_max_dotclk(dev_priv);
+
 	DRM_DEBUG_DRIVER("Max CD clock rate: %d kHz\n",
 			 dev_priv->max_cdclk_freq);
+
+	DRM_DEBUG_DRIVER("Max dotclock rate: %d kHz\n",
+			 dev_priv->max_dotclk_freq);
 }
 
 static void intel_update_cdclk(struct drm_device *dev)
@@ -6037,13 +5976,6 @@ static void valleyview_crtc_enable(struct drm_crtc *crtc)
 
 	is_dsi = intel_pipe_has_type(intel_crtc, INTEL_OUTPUT_DSI);
 
-	if (!is_dsi) {
-		if (IS_CHERRYVIEW(dev))
-			chv_prepare_pll(intel_crtc, intel_crtc->config);
-		else
-			vlv_prepare_pll(intel_crtc, intel_crtc->config);
-	}
-
 	if (intel_crtc->config->has_dp_encoder)
 		intel_dp_set_m_n(intel_crtc, M1_N1);
 
@@ -6067,10 +5999,13 @@ static void valleyview_crtc_enable(struct drm_crtc *crtc)
 			encoder->pre_pll_enable(encoder);
 
 	if (!is_dsi) {
-		if (IS_CHERRYVIEW(dev))
+		if (IS_CHERRYVIEW(dev)) {
+			chv_prepare_pll(intel_crtc, intel_crtc->config);
 			chv_enable_pll(intel_crtc, intel_crtc->config);
-		else
+		} else {
+			vlv_prepare_pll(intel_crtc, intel_crtc->config);
 			vlv_enable_pll(intel_crtc, intel_crtc->config);
+		}
 	}
 
 	for_each_encoder_on_crtc(dev, crtc, encoder)
@@ -6197,6 +6132,10 @@ static void i9xx_crtc_disable(struct drm_crtc *crtc)
 		else
 			i9xx_disable_pll(intel_crtc);
 	}
+
+	for_each_encoder_on_crtc(dev, crtc, encoder)
+		if (encoder->post_pll_disable)
+			encoder->post_pll_disable(encoder);
 
 	if (!IS_GEN2(dev))
 		intel_set_cpu_fifo_underrun_reporting(dev_priv, pipe, false);
@@ -7379,8 +7318,7 @@ static void chv_prepare_pll(struct intel_crtc *crtc,
 			1 << DPIO_CHV_N_DIV_SHIFT);
 
 	/* M2 fraction division */
-	if (bestm2_frac)
-		vlv_dpio_write(dev_priv, pipe, CHV_PLL_DW2(port), bestm2_frac);
+	vlv_dpio_write(dev_priv, pipe, CHV_PLL_DW2(port), bestm2_frac);
 
 	/* M2 fraction division enable */
 	dpio_val = vlv_dpio_read(dev_priv, pipe, CHV_PLL_DW3(port));
@@ -11036,10 +10974,10 @@ static int intel_gen7_queue_flip(struct drm_device *dev,
 					DERRMR_PIPEB_PRI_FLIP_DONE |
 					DERRMR_PIPEC_PRI_FLIP_DONE));
 		if (IS_GEN8(dev))
-			intel_ring_emit(ring, MI_STORE_REGISTER_MEM_GEN8(1) |
+			intel_ring_emit(ring, MI_STORE_REGISTER_MEM_GEN8 |
 					      MI_SRM_LRM_GLOBAL_GTT);
 		else
-			intel_ring_emit(ring, MI_STORE_REGISTER_MEM(1) |
+			intel_ring_emit(ring, MI_STORE_REGISTER_MEM |
 					      MI_SRM_LRM_GLOBAL_GTT);
 		intel_ring_emit(ring, DERRMR);
 		intel_ring_emit(ring, ring->scratch.gtt_offset + 256);
@@ -11238,6 +11176,9 @@ static bool __intel_pageflip_stall_check(struct drm_device *dev,
 
 	if (atomic_read(&work->pending) >= INTEL_FLIP_COMPLETE)
 		return true;
+
+	if (atomic_read(&work->pending) < INTEL_FLIP_PENDING)
+		return false;
 
 	if (!work->enable_stall_check)
 		return false;
@@ -11629,7 +11570,7 @@ int intel_plane_atomic_calc_changes(struct drm_crtc_state *crtc_state,
 		intel_crtc->atomic.update_wm_pre = true;
 	}
 
-	if (visible)
+	if (visible || was_visible)
 		intel_crtc->atomic.fb_bits |=
 			to_intel_plane(plane)->frontbuffer_bit;
 
@@ -11902,14 +11843,16 @@ static void intel_dump_pipe_config(struct intel_crtc *crtc,
 		      pipe_config->fdi_m_n.gmch_m, pipe_config->fdi_m_n.gmch_n,
 		      pipe_config->fdi_m_n.link_m, pipe_config->fdi_m_n.link_n,
 		      pipe_config->fdi_m_n.tu);
-	DRM_DEBUG_KMS("dp: %i, gmch_m: %u, gmch_n: %u, link_m: %u, link_n: %u, tu: %u\n",
+	DRM_DEBUG_KMS("dp: %i, lanes: %i, gmch_m: %u, gmch_n: %u, link_m: %u, link_n: %u, tu: %u\n",
 		      pipe_config->has_dp_encoder,
+		      pipe_config->lane_count,
 		      pipe_config->dp_m_n.gmch_m, pipe_config->dp_m_n.gmch_n,
 		      pipe_config->dp_m_n.link_m, pipe_config->dp_m_n.link_n,
 		      pipe_config->dp_m_n.tu);
 
-	DRM_DEBUG_KMS("dp: %i, gmch_m2: %u, gmch_n2: %u, link_m2: %u, link_n2: %u, tu2: %u\n",
+	DRM_DEBUG_KMS("dp: %i, lanes: %i, gmch_m2: %u, gmch_n2: %u, link_m2: %u, link_n2: %u, tu2: %u\n",
 		      pipe_config->has_dp_encoder,
+		      pipe_config->lane_count,
 		      pipe_config->dp_m2_n2.gmch_m,
 		      pipe_config->dp_m2_n2.gmch_n,
 		      pipe_config->dp_m2_n2.link_m,
@@ -12416,6 +12359,7 @@ intel_pipe_config_compare(struct drm_device *dev,
 	PIPE_CONF_CHECK_M_N(fdi_m_n);
 
 	PIPE_CONF_CHECK_I(has_dp_encoder);
+	PIPE_CONF_CHECK_I(lane_count);
 
 	if (INTEL_INFO(dev)->gen < 8) {
 		PIPE_CONF_CHECK_M_N(dp_m_n);
@@ -14773,8 +14717,6 @@ void intel_modeset_init(struct drm_device *dev)
 					      pipe_name(pipe), sprite_name(pipe, sprite), ret);
 		}
 	}
-
-	intel_init_dpio(dev);
 
 	intel_shared_dpll_init(dev);
 

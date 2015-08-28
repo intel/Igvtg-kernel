@@ -362,6 +362,7 @@ static const struct intel_device_info intel_skylake_info = {
 	.ring_mask = RENDER_RING | BSD_RING | BLT_RING | VEBOX_RING,
 	.has_llc = 1,
 	.has_ddi = 1,
+	.has_fpga_dbg = 1,
 	.has_fbc = 1,
 	GEN_DEFAULT_PIPEOFFSETS,
 	IVB_CURSOR_OFFSETS,
@@ -374,6 +375,7 @@ static const struct intel_device_info intel_skylake_gt3_info = {
 	.ring_mask = RENDER_RING | BSD_RING | BLT_RING | VEBOX_RING | BSD2_RING,
 	.has_llc = 1,
 	.has_ddi = 1,
+	.has_fpga_dbg = 1,
 	.has_fbc = 1,
 	GEN_DEFAULT_PIPEOFFSETS,
 	IVB_CURSOR_OFFSETS,
@@ -386,6 +388,7 @@ static const struct intel_device_info intel_broxton_info = {
 	.ring_mask = RENDER_RING | BSD_RING | BLT_RING | VEBOX_RING,
 	.num_pipes = 3,
 	.has_ddi = 1,
+	.has_fpga_dbg = 1,
 	.has_fbc = 1,
 	GEN_DEFAULT_PIPEOFFSETS,
 	IVB_CURSOR_OFFSETS,
@@ -1723,7 +1726,7 @@ static int __init i915_init(void)
 	 * to the atomic ioctl and the atomic properties.  Only plane operations on
 	 * a single CRTC will actually work.
 	 */
-	if (driver.driver_features & DRIVER_MODESET)
+	if (i915.nuclear_pageflip)
 		driver.driver_features |= DRIVER_ATOMIC;
 
 	return drm_pci_init(&driver, &i915_pci_driver);

@@ -352,8 +352,8 @@
  */
 #define MI_LOAD_REGISTER_IMM(x)	MI_INSTR(0x22, 2*(x)-1)
 #define   MI_LRI_FORCE_POSTED		(1<<12)
-#define MI_STORE_REGISTER_MEM(x) MI_INSTR(0x24, 2*(x)-1)
-#define MI_STORE_REGISTER_MEM_GEN8(x) MI_INSTR(0x24, 3*(x)-1)
+#define MI_STORE_REGISTER_MEM        MI_INSTR(0x24, 1)
+#define MI_STORE_REGISTER_MEM_GEN8   MI_INSTR(0x24, 2)
 #define   MI_SRM_LRM_GLOBAL_GTT		(1<<22)
 #define MI_FLUSH_DW		MI_INSTR(0x26, 1) /* for GEN6 */
 #define   MI_FLUSH_DW_STORE_INDEX	(1<<21)
@@ -364,8 +364,8 @@
 #define   MI_INVALIDATE_BSD		(1<<7)
 #define   MI_FLUSH_DW_USE_GTT		(1<<2)
 #define   MI_FLUSH_DW_USE_PPGTT		(0<<2)
-#define MI_LOAD_REGISTER_MEM(x) MI_INSTR(0x29, 2*(x)-1)
-#define MI_LOAD_REGISTER_MEM_GEN8(x) MI_INSTR(0x29, 3*(x)-1)
+#define MI_LOAD_REGISTER_MEM	   MI_INSTR(0x29, 1)
+#define MI_LOAD_REGISTER_MEM_GEN8  MI_INSTR(0x29, 2)
 #define MI_BATCH_BUFFER		MI_INSTR(0x30, 1)
 #define   MI_BATCH_NON_SECURE		(1)
 /* for snb/ivb/vlv this also means "batch in ppgtt" when ppgtt is enabled. */
@@ -1135,10 +1135,21 @@ enum skl_disp_power_wells {
 
 #define _CHV_CMN_DW19_CH0		0x814c
 #define _CHV_CMN_DW6_CH1		0x8098
+#define   DPIO_DYNPWRDOWNEN_CH1		(1 << 28) /* CL2 DW6 only */
 #define   CHV_CMN_USEDCLKCHANNEL	(1 << 13)
+
 #define CHV_CMN_DW19(ch) _PIPE(ch, _CHV_CMN_DW19_CH0, _CHV_CMN_DW6_CH1)
 
+#define CHV_CMN_DW28			0x8170
+#define   DPIO_CL1POWERDOWNEN		(1 << 23)
+#define   DPIO_DYNPWRDOWNEN_CH0		(1 << 22)
+#define   DPIO_SUS_CLK_CONFIG_ON		(0 << 0)
+#define   DPIO_SUS_CLK_CONFIG_CLKREQ		(1 << 0)
+#define   DPIO_SUS_CLK_CONFIG_GATE		(2 << 0)
+#define   DPIO_SUS_CLK_CONFIG_GATE_CLKREQ	(3 << 0)
+
 #define CHV_CMN_DW30			0x8178
+#define   DPIO_CL2_LDOFUSE_PWRENB	(1 << 6)
 #define   DPIO_LRC_BYPASS		(1 << 3)
 
 #define _TXLANE(ch, lane, offset) ((ch ? 0x2400 : 0) + \
@@ -1674,11 +1685,18 @@ enum skl_disp_power_wells {
 #define GFX_MODE_GEN7	0x0229c
 #define RING_MODE_GEN7(ring)	((ring)->mmio_base+0x29c)
 #define   GFX_RUN_LIST_ENABLE		(1<<15)
+#define   GFX_INTERRUPT_STEERING	(1<<14)
 #define   GFX_TLB_INVALIDATE_EXPLICIT	(1<<13)
 #define   GFX_SURFACE_FAULT_ENABLE	(1<<12)
 #define   GFX_REPLAY_MODE		(1<<11)
 #define   GFX_PSMI_GRANULARITY		(1<<10)
 #define   GFX_PPGTT_ENABLE		(1<<9)
+#define   GEN8_GFX_PPGTT_48B		(1<<7)
+
+#define   GFX_FORWARD_VBLANK_MASK	(3<<5)
+#define   GFX_FORWARD_VBLANK_NEVER	(0<<5)
+#define   GFX_FORWARD_VBLANK_ALWAYS	(1<<5)
+#define   GFX_FORWARD_VBLANK_COND	(2<<5)
 
 #define VLV_DISPLAY_BASE 0x180000
 #define VLV_MIPI_BASE VLV_DISPLAY_BASE
@@ -2185,10 +2203,12 @@ enum skl_disp_power_wells {
 #define DPIO_PHY_STATUS			(VLV_DISPLAY_BASE + 0x6240)
 #define   DPLL_PORTD_READY_MASK		(0xf)
 #define DISPLAY_PHY_CONTROL (VLV_DISPLAY_BASE + 0x60100)
+#define   PHY_CH_POWER_DOWN_OVRD_EN(phy, ch)	(1 << (2*(phy)+(ch)+27))
 #define   PHY_LDO_DELAY_0NS			0x0
 #define   PHY_LDO_DELAY_200NS			0x1
 #define   PHY_LDO_DELAY_600NS			0x2
 #define   PHY_LDO_SEQ_DELAY(delay, phy)		((delay) << (2*(phy)+23))
+#define   PHY_CH_POWER_DOWN_OVRD(mask, phy, ch)	((mask) << (8*(phy)+4*(ch)+11))
 #define   PHY_CH_SU_PSR				0x1
 #define   PHY_CH_DEEP_PSR			0x7
 #define   PHY_CH_POWER_MODE(mode, phy, ch)	((mode) << (6*(phy)+3*(ch)+2))
@@ -4107,6 +4127,7 @@ enum skl_disp_power_wells {
 /* How many wires to use. I guess 3 was too hard */
 #define   DP_PORT_WIDTH(width)		(((width) - 1) << 19)
 #define   DP_PORT_WIDTH_MASK		(7 << 19)
+#define   DP_PORT_WIDTH_SHIFT		19
 
 /* Mystic DPCD version 1.1 special mode */
 #define   DP_ENHANCED_FRAMING		(1 << 18)
@@ -5693,11 +5714,12 @@ enum skl_disp_power_wells {
 #define GEN8_GT_IIR(which) (0x44308 + (0x10 * (which)))
 #define GEN8_GT_IER(which) (0x4430c + (0x10 * (which)))
 
-#define GEN8_BCS_IRQ_SHIFT 16
 #define GEN8_RCS_IRQ_SHIFT 0
-#define GEN8_VCS2_IRQ_SHIFT 16
+#define GEN8_BCS_IRQ_SHIFT 16
 #define GEN8_VCS1_IRQ_SHIFT 0
+#define GEN8_VCS2_IRQ_SHIFT 16
 #define GEN8_VECS_IRQ_SHIFT 0
+#define GEN8_WD_IRQ_SHIFT 16
 
 #define GEN8_DE_PIPE_ISR(pipe) (0x44400 + (0x10 * (pipe)))
 #define GEN8_DE_PIPE_IMR(pipe) (0x44404 + (0x10 * (pipe)))
@@ -6870,7 +6892,9 @@ enum skl_disp_power_wells {
 #define   GEN9_PGCTL_SSB_EU311_ACK	(1 << 14)
 
 #define GEN7_MISCCPCTL			(0x9424)
-#define   GEN7_DOP_CLOCK_GATE_ENABLE	(1<<0)
+#define   GEN7_DOP_CLOCK_GATE_ENABLE		(1<<0)
+#define   GEN8_DOP_CLOCK_GATE_CFCLK_ENABLE	(1<<2)
+#define   GEN8_DOP_CLOCK_GATE_GUC_ENABLE	(1<<4)
 
 #define GEN8_GARBCNTL                   0xB004
 #define   GEN9_GAPS_TSV_CREDIT_DISABLE  (1<<7)
@@ -7159,6 +7183,8 @@ enum skl_disp_power_wells {
 #define  DDI_BUF_IS_IDLE			(1<<7)
 #define  DDI_A_4_LANES				(1<<4)
 #define  DDI_PORT_WIDTH(width)			(((width) - 1) << 1)
+#define  DDI_PORT_WIDTH_MASK			(7 << 1)
+#define  DDI_PORT_WIDTH_SHIFT			1
 #define  DDI_INIT_DISPLAY_DETECTED		(1<<0)
 
 /* DDI Buffer Translations */
