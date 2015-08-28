@@ -17,6 +17,8 @@ DOCBOOKS := z8530book.xml device-drivers.xml \
 	    tracepoint.xml drm.xml media_api.xml w1.xml \
 	    writing_musb_glue_layer.xml crypto-API.xml
 
+MARKDOWNREADY := drm.xml
+
 include Documentation/DocBook/media/Makefile
 
 ###
@@ -64,8 +66,9 @@ installmandocs: mandocs
 
 ###
 #External programs used
-KERNELDOC = $(srctree)/scripts/kernel-doc
-DOCPROC   = $(objtree)/scripts/docproc
+KERNELDOCXMLREF = $(srctree)/scripts/kernel-doc-xml-ref
+KERNELDOC       = $(srctree)/scripts/kernel-doc
+DOCPROC         = $(objtree)/scripts/docproc
 
 XMLTOFLAGS = -m $(srctree)/$(src)/stylesheet.xsl
 XMLTOFLAGS += --skip-validation
@@ -78,18 +81,23 @@ XMLTOFLAGS += --skip-validation
 # The following rules are used to generate the .xml documentation
 # required to generate the final targets. (ps, pdf, html).
 quiet_cmd_docproc = DOCPROC $@
-      cmd_docproc = SRCTREE=$(srctree)/ $(DOCPROC) doc $< >$@
+      cmd_docproc = SRCTREE=$(srctree)/ $(DOCPROC) doc $<
 define rule_docproc
-	set -e;								\
-        $(if $($(quiet)cmd_$(1)),echo '  $($(quiet)cmd_$(1))';) 	\
-        $(cmd_$(1)); 							\
-        ( 								\
-          echo 'cmd_$@ := $(cmd_$(1))'; 				\
-          echo $@: `SRCTREE=$(srctree) $(DOCPROC) depend $<`; 		\
+	set -e;									\
+	USEMARKDOWN="";								\
+	FILE=`basename $@`;							\
+	[[ "$(MARKDOWNREADY)" =~ "$${FILE}" ]] && USEMARKDOWN="-use-markdown";	\
+        $(if $($(quiet)cmd_$(1)),echo '  $($(quiet)cmd_$(1))';) 		\
+        $(cmd_$(1)) $$USEMARKDOWN >$@;						\
+        ( 									\
+          echo 'cmd_$@ := $(cmd_$(1))';				 		\
+          echo $@: `SRCTREE=$(srctree) $(DOCPROC) depend $<`;			\
         ) > $(dir $@).$(notdir $@).cmd
 endef
 
-%.xml: %.tmpl $(KERNELDOC) $(DOCPROC) FORCE
+%.xml: %.tmpl $(KERNELDOC) $(DOCPROC) $(KERNELDOCXMLREF) FORCE
+	@(which pandoc > /dev/null 2>&1) || \
+	(echo "*** To get propper documentation you need to install pandoc ***";)
 	$(call if_changed_rule,docproc)
 
 # Tell kbuild to always build the programs
@@ -99,6 +107,10 @@ notfoundtemplate = echo "*** You have to install docbook-utils or xmlto ***"; \
 		   exit 1
 db2xtemplate = db2TYPE -o $(dir $@) $<
 xmltotemplate = xmlto TYPE $(XMLTOFLAGS) -o $(dir $@) $<
+
+ifneq ($(shell which pandoc >/dev/null 2>&1 && echo found),found)
+	MARKDOWNREADY := "";
+endif
 
 # determine which methods are available
 ifeq ($(shell which db2ps >/dev/null 2>&1 && echo found),found)
@@ -140,7 +152,20 @@ quiet_cmd_db2html = HTML    $@
 		echo '<a HREF="$(patsubst %.html,%,$(notdir $@))/index.html"> \
 		$(patsubst %.html,%,$(notdir $@))</a><p>' > $@
 
-%.html:	%.xml
+###
+# Rules to create an aux XML and .db, and use them to re-process the DocBook XML
+# to fill internal hyperlinks
+       gen_aux_xml = :
+ quiet_gen_aux_xml = echo '  XMLREF  $@'
+silent_gen_aux_xml = :
+%.aux.xml: %.xml
+	@$($(quiet)gen_aux_xml)
+	@rm -rf $@
+	@(cat $< | egrep "^<refentry id" | egrep -o "\".*\"" | cut -f 2 -d \" > $<.db)
+	@$(KERNELDOCXMLREF) -db $<.db $< > $@
+.PRECIOUS: %.aux.xml
+
+%.html:	%.aux.xml
 	@(which xmlto > /dev/null 2>&1) || \
 	 (echo "*** You need to install xmlto ***"; \
 	  exit 1)
@@ -209,15 +234,18 @@ dochelp:
 ###
 # Temporary files left by various tools
 clean-files := $(DOCBOOKS) \
-	$(patsubst %.xml, %.dvi,  $(DOCBOOKS)) \
-	$(patsubst %.xml, %.aux,  $(DOCBOOKS)) \
-	$(patsubst %.xml, %.tex,  $(DOCBOOKS)) \
-	$(patsubst %.xml, %.log,  $(DOCBOOKS)) \
-	$(patsubst %.xml, %.out,  $(DOCBOOKS)) \
-	$(patsubst %.xml, %.ps,   $(DOCBOOKS)) \
-	$(patsubst %.xml, %.pdf,  $(DOCBOOKS)) \
-	$(patsubst %.xml, %.html, $(DOCBOOKS)) \
-	$(patsubst %.xml, %.9,    $(DOCBOOKS)) \
+	$(patsubst %.xml, %.dvi,     $(DOCBOOKS)) \
+	$(patsubst %.xml, %.aux,     $(DOCBOOKS)) \
+	$(patsubst %.xml, %.tex,     $(DOCBOOKS)) \
+	$(patsubst %.xml, %.log,     $(DOCBOOKS)) \
+	$(patsubst %.xml, %.out,     $(DOCBOOKS)) \
+	$(patsubst %.xml, %.ps,      $(DOCBOOKS)) \
+	$(patsubst %.xml, %.pdf,     $(DOCBOOKS)) \
+	$(patsubst %.xml, %.html,    $(DOCBOOKS)) \
+	$(patsubst %.xml, %.9,       $(DOCBOOKS)) \
+	$(patsubst %.xml, %.aux.xml, $(DOCBOOKS)) \
+	$(patsubst %.xml, %.xml.db,  $(DOCBOOKS)) \
+	$(patsubst %.xml, %.xml,     $(DOCBOOKS)) \
 	$(index)
 
 clean-dirs := $(patsubst %.xml,%,$(DOCBOOKS)) man
