@@ -1,0 +1,24 @@
+origin/drm-intel-fixes c13dcf9f2d6f5f06ef1bf79ec456df614c5e058b
+	Linux 4.2-rc8
+drm-upstream/drm-fixes 7f98ca454ad373fc1b76be804fa7138ff68c1d27
+	drm/radeon: fix hotplug race at startup
+origin/drm-intel-next-fixes 26951caf55d73ceb1967b0bf12f6d0b96853508e
+	drm/i915/skl: enable DDI-E hotplug
+origin/drm-intel-next-queued c5b852f33e7844f4664794a3b3c738d07b09ce0a
+	Partially revert "drm/i915: Use full atomic modeset."
+drm-upstream/drm-next 92cffd56b21c825579f3b37bc7803e4c37073076
+	drm/nouveau/dispnv04: fix build on powerpc
+sound-upstream/for-next 6aa6925cad06159dc6e25857991bbc4960821242
+	ALSA: usb-audio: correct the value cache check.
+origin/topic/drm-misc 6b976cc293b93b8dc0f82aa0f79bbb9ec60bd21d
+	dtrm/edid: Allow comma separated edid binaries. (v3)
+origin/topic/drm-fixes 4772ff03df8094fd99d28de5fcf5df3a3e9c68bb
+	drm/dp/mst: Remove port after removing connector.
+origin/topic/kerneldoc 752aadcf3f1bd35739f96683472792158941d3b3
+	scripts/kernel-doc: Improve Markdown results
+origin/topic/crc-pmic 04cbfe68c3190f23bcfec230bfd832b533f35554
+	mfd: Add GPIOLIB dependency if INTEL_SOC_PMIC is to be enabled
+origin/topic/connector-locking 3fdefa399e4644399ce3e74e65a75122d52dba6a
+	drm: gc now dead mode_group code
+origin/topic/mst-fixes 6ea76f3cade4734e73e3da842005820558b8b828
+	drm/atomic-helpers: Make encoder picking more robust
