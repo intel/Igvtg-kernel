@@ -91,6 +91,8 @@ i915-y += dvo_ch7017.o \
 	  intel_sdvo.o \
 	  intel_tv.o
 
+obj-$(CONFIG_I915_GVT)  += gvt/
+
 # virtual gpu code
 i915-y += i915_vgpu.o
 

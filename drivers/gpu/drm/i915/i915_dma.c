@@ -943,6 +943,10 @@ int i915_driver_load(struct drm_device *dev, unsigned long flags)
 
 	intel_uncore_init(dev);
 
+	dev_priv->vgpu.host_private_data = gvt_create_pgt_device(dev_priv);
+	if(intel_gvt_host_active(dev))
+		DRM_INFO("GVT-g is running in host mode\n");
+
 	ret = i915_gem_gtt_init(dev);
 	if (ret)
 		goto out_freecsr;
@@ -1067,6 +1071,13 @@ int i915_driver_load(struct drm_device *dev, unsigned long flags)
 		goto out_power_well;
 	}
 
+	if (intel_gvt_host_active(dev)) {
+		if (!gvt_post_init_pgt_device(dev_priv->vgpu.host_private_data)) {
+			DRM_ERROR("failed to post init pgt device\n");
+			goto out_power_well;
+		}
+	}
+
 	/*
 	 * Notify a valid surface after modesetting,
 	 * when running inside a VM.
@@ -1117,6 +1128,10 @@ out_gtt:
 	i915_global_gtt_cleanup(dev);
 out_freecsr:
 	intel_csr_ucode_fini(dev_priv);
+	if (intel_gvt_host_active(dev)) {
+		gvt_destroy_pgt_device(dev_priv->vgpu.host_private_data);
+		dev_priv->vgpu.host_private_data = NULL;
+	}
 	intel_uncore_fini(dev);
 	pci_iounmap(dev->pdev, dev_priv->regs);
 put_bridge:
@@ -1165,6 +1180,10 @@ int i915_driver_unload(struct drm_device *dev)
 
 	intel_modeset_cleanup(dev);
 
+	if (intel_gvt_host_active(dev)) {
+		gvt_destroy_pgt_device(dev_priv->vgpu.host_private_data);
+		dev_priv->vgpu.host_private_data = NULL;
+	}
 	/*
 	 * free the memory space allocated for the child device
 	 * config parsed from VBT

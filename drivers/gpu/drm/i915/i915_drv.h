@@ -1673,6 +1673,7 @@ struct i915_workarounds {
 
 struct i915_virtual_gpu {
 	bool active;
+	void *host_private_data;
 };
 
 struct i915_execbuffer_params {
@@ -2745,6 +2746,11 @@ void assert_forcewakes_inactive(struct drm_i915_private *dev_priv);
 static inline bool intel_vgpu_active(struct drm_device *dev)
 {
 	return to_i915(dev)->vgpu.active;
+}
+
+static inline bool intel_gvt_host_active(struct drm_device *dev)
+{
+	return to_i915(dev)->vgpu.host_private_data ? true : false;
 }
 
 void

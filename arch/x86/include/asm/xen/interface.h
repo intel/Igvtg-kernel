@@ -73,6 +73,9 @@
 #endif
 
 #ifndef __ASSEMBLY__
+
+#include <linux/types.h>
+
 /* Explicitly size integers that represent pfns in the public interface
  * with Xen so that on ARM we can have one ABI that works for 32 and 64
  * bit guests. */

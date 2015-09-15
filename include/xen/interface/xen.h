@@ -28,6 +28,7 @@
 #define __XEN_PUBLIC_XEN_H__
 
 #include <asm/xen/interface.h>
+#include <linux/types.h>
 
 /*
  * XEN "SYSTEM CALLS" (a.k.a. HYPERCALLS).

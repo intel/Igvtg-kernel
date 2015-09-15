@@ -113,5 +113,8 @@ struct vgt_if {
 extern void i915_check_vgpu(struct drm_device *dev);
 extern int intel_vgt_balloon(struct drm_device *dev);
 extern void intel_vgt_deballoon(void);
+extern void *gvt_create_pgt_device(struct drm_i915_private *dev_priv);
+extern bool gvt_post_init_pgt_device(void *private_data);
+extern void gvt_destroy_pgt_device(void *private_data);
 
 #endif /* _I915_VGPU_H_ */
