@@ -136,6 +136,8 @@ static void init_initial_cfg_space_state(struct pgt_device *pdev)
 
 static void clean_initial_mmio_state(struct pgt_device *pdev)
 {
+	gvt_clean_initial_mmio_state(pdev);
+
 	if (pdev->gttmmio_va) {
 		iounmap(pdev->gttmmio_va);
 		pdev->gttmmio_va = NULL;
@@ -178,6 +180,9 @@ static bool init_initial_mmio_state(struct pgt_device *pdev)
 	gvt_info("gttmmio: 0x%llx, gmadr: 0x%llx", pdev->gttmmio_base, pdev->gmadr_base);
 	gvt_info("gttmmio_va: %p", pdev->gttmmio_va);
 	gvt_info("gmadr_va: %p", pdev->gmadr_va);
+
+	if (!gvt_setup_initial_mmio_state(pdev))
+		goto err;
 
 	return true;
 err:
@@ -233,6 +238,7 @@ static bool init_service_thread(struct pgt_device *pdev)
 static void clean_pgt_device(struct pgt_device *pdev)
 {
 	clean_service_thread(pdev);
+	gvt_clean_mmio_emulation_state(pdev);
 	clean_initial_mmio_state(pdev);
 	gvt_clean_resource_allocator(pdev);
 }
@@ -248,6 +254,9 @@ static bool init_pgt_device(struct pgt_device *pdev, struct drm_i915_private *de
 		goto err;
 
 	gvt_init_resource_allocator(pdev);
+
+	if (!gvt_setup_mmio_emulation_state(pdev))
+		goto err;
 
 	if (!init_service_thread(pdev))
 		goto err;

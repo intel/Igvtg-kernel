@@ -33,6 +33,7 @@
 #include "hypercall.h"
 #include "mpt.h"
 #include "fb_decoder.h"
+#include "mmio.h"
 
 #define GVT_MAX_VGPU 8
 
@@ -40,6 +41,8 @@
 #define GVT_GM_BITMAP_BITS	(GVT_MAX_GM_SIZE >> 20)
 #define GVT_MAX_NUM_FENCES	32
 #define GVT_FENCE_BITMAP_BITS	GVT_MAX_NUM_FENCES
+
+#define GVT_HASH_BITS 9
 
 enum {
 	GVT_HYPERVISOR_TYPE_XEN = 0,
@@ -133,7 +136,16 @@ struct pgt_device {
 	DECLARE_BITMAP(fence_bitmap, GVT_FENCE_BITMAP_BITS);
 
 	u64 total_gm_sz;
+
 	struct gvt_gm_allocator gm_allocator;
+
+	u32 *initial_mmio_state;
+	u32 *reg_info;
+
+	gvt_aux_entry_t aux_table[GVT_AUX_TABLE_NUM];
+	u32 aux_table_index;
+
+	DECLARE_HASHTABLE(mmio_table, GVT_HASH_BITS);
 };
 
 /* definitions for physical aperture/GM space */
@@ -200,6 +212,108 @@ extern int gvt_alloc_gm_and_fence_resource(struct vgt_device *vgt,
 		struct gvt_instance_info *info);
 extern void gvt_free_gm_and_fence_resource(struct vgt_device *vgt);
 
+#define REG_INDEX(reg) ((reg) >> 2)
+
+#define D_SNB   (1 << 0)
+#define D_IVB   (1 << 1)
+#define D_HSW   (1 << 2)
+#define D_BDW   (1 << 3)
+
+#define D_GEN8PLUS      (D_BDW)
+#define D_GEN75PLUS     (D_HSW | D_BDW)
+#define D_GEN7PLUS      (D_IVB | D_HSW | D_BDW)
+
+#define D_BDW_PLUS      (D_BDW)
+#define D_HSW_PLUS      (D_HSW | D_BDW)
+#define D_IVB_PLUS      (D_IVB | D_HSW | D_BDW)
+
+#define D_PRE_BDW       (D_SNB | D_IVB | D_HSW)
+
+#define D_ALL           (D_SNB | D_IVB | D_HSW | D_BDW)
+
+#define reg_addr_fix(pdev, reg)		(pdev->reg_info[REG_INDEX(reg)] & GVT_REG_ADDR_FIX)
+#define reg_hw_status(pdev, reg)	(pdev->reg_info[REG_INDEX(reg)] & GVT_REG_HW_STATUS)
+#define reg_virt(pdev, reg)		(pdev->reg_info[REG_INDEX(reg)] & GVT_REG_VIRT)
+#define reg_mode_ctl(pdev, reg)		(pdev->reg_info[REG_INDEX(reg)] & GVT_REG_MODE_CTL)
+#define reg_is_tracked(pdev, reg)	(pdev->reg_info[REG_INDEX(reg)] & GVT_REG_TRACKED)
+#define reg_is_accessed(pdev, reg)	(pdev->reg_info[REG_INDEX(reg)] & GVT_REG_ACCESSED)
+#define reg_is_saved(pdev, reg)		(pdev->reg_info[REG_INDEX(reg)] & GVT_REG_SAVED)
+
+#define reg_aux_index(pdev, reg)	\
+	((pdev->reg_info[REG_INDEX(reg)] & GVT_REG_INDEX_MASK) >> GVT_REG_INDEX_SHIFT)
+#define reg_has_aux_info(pdev, reg)	(reg_mode_ctl(pdev, reg) | reg_addr_fix(pdev, reg))
+#define reg_aux_mode_mask(pdev, reg)	\
+	(pdev->aux_table[reg_aux_index(pdev, reg)].mode_ctl.mask)
+#define reg_aux_addr_mask(pdev, reg)	\
+	(pdev->aux_table[reg_aux_index(pdev, reg)].addr_fix.mask)
+#define reg_aux_addr_size(pdev, reg)	\
+	(pdev->aux_table[reg_aux_index(pdev, reg)].addr_fix.size)
+
+static inline void reg_set_hw_status(struct pgt_device *pdev, u32 reg)
+{
+	ASSERT_NUM(!reg_is_tracked(pdev, reg), reg);
+	pdev->reg_info[REG_INDEX(reg)] |= GVT_REG_HW_STATUS;
+}
+
+static inline void reg_set_virt(struct pgt_device *pdev, u32 reg)
+{
+	ASSERT_NUM(!reg_is_tracked(pdev, reg), reg);
+	pdev->reg_info[REG_INDEX(reg)] |= GVT_REG_VIRT;
+}
+
+/* mask bits for addr fix */
+static inline void reg_set_addr_fix(struct pgt_device *pdev,
+		u32 reg, u32 mask)
+{
+	ASSERT(!reg_has_aux_info(pdev, reg));
+	ASSERT(pdev->aux_table_index <= GVT_AUX_TABLE_NUM - 1);
+	ASSERT_NUM(!reg_is_tracked(pdev, reg), reg);
+
+	pdev->aux_table[pdev->aux_table_index].addr_fix.mask = mask;
+	pdev->reg_info[REG_INDEX(reg)] |= GVT_REG_ADDR_FIX |
+		(pdev->aux_table_index << GVT_REG_INDEX_SHIFT);
+	pdev->aux_table_index++;
+}
+
+/* mask bits for mode mask */
+static inline void reg_set_mode_ctl(struct pgt_device *pdev,
+		u32 reg)
+{
+	ASSERT(!reg_has_aux_info(pdev, reg));
+	ASSERT(pdev->aux_table_index <= GVT_AUX_TABLE_NUM - 1);
+	ASSERT_NUM(!reg_is_tracked(pdev, reg), reg);
+
+	pdev->reg_info[REG_INDEX(reg)] |= GVT_REG_MODE_CTL |
+		(pdev->aux_table_index << GVT_REG_INDEX_SHIFT);
+	pdev->aux_table_index++;
+}
+
+static inline void reg_set_tracked(struct pgt_device *pdev,
+		u32 reg)
+{
+	ASSERT_NUM(!reg_is_tracked(pdev, reg), reg);
+	pdev->reg_info[REG_INDEX(reg)] |= GVT_REG_TRACKED;
+}
+
+static inline void reg_set_accessed(struct pgt_device *pdev,
+		u32 reg)
+{
+	pdev->reg_info[REG_INDEX(reg)] |= GVT_REG_ACCESSED;
+}
+
+static inline void reg_set_saved(struct pgt_device *pdev,
+		u32 reg)
+{
+	pdev->reg_info[REG_INDEX(reg)] |= GVT_REG_SAVED;
+}
+
+static inline void reg_set_cmd_access(struct pgt_device *pdev,
+		u32 reg)
+{
+	pdev->reg_info[REG_INDEX(reg)] |= GVT_REG_CMD_ACCESS;
+	reg_set_accessed(pdev, reg);
+}
+
 static inline u32 gvt_mmio_read(struct pgt_device *pdev,
 		u32 reg)
 {
@@ -231,5 +345,18 @@ static inline void gvt_mmio_write64(struct pgt_device *pdev,
 	i915_reg_t tmp = {.reg = reg};
 	I915_WRITE64(tmp, val);
 }
+
+static inline void gvt_mmio_posting_read(struct pgt_device *pdev, u32 reg)
+{
+	struct drm_i915_private *dev_priv = pdev->dev_priv;
+	i915_reg_t tmp = {.reg = reg};
+	POSTING_READ(tmp);
+}
+
+extern void gvt_clean_initial_mmio_state(struct pgt_device *pdev);
+extern bool gvt_setup_initial_mmio_state(struct pgt_device *pdev);
+
+extern void gvt_clean_mmio_emulation_state(struct pgt_device *pdev);
+extern bool gvt_setup_mmio_emulation_state(struct pgt_device *pdev);
 
 #endif

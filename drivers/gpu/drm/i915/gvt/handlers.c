@@ -21,18 +21,27 @@
  * SOFTWARE.
  */
 
-#ifndef _GVT_REG_H
-#define _GVT_REG_H
+#include "gvt.h"
 
-#define GVT_CFG_SPACE_SZ	256
-#define GVT_BAR_NUM		4
+/* TODO: Merge register definition from i915. */
+struct gvt_reg_info gvt_general_reg_info[] = {
+{0, 0, 0, 0, 0, NULL, NULL},
+};
 
-#define GVT_REG_CFG_SPACE_BAR0	0x10
-#define GVT_REG_CFG_SPACE_BAR1	0x18
-#define GVT_REG_CFG_SPACE_BAR2	0x20
+struct gvt_reg_info gvt_broadwell_reg_info[] = {
+{0, 0, 0, 0, 0, NULL, NULL},
+};
 
-#define _PCH_GMBUS2			0xc5108
+int gvt_get_reg_num(int type)
+{
+        switch(type){
+                case D_ALL:
+                        return ARRAY_SIZE(gvt_general_reg_info);
+                case D_BDW:
+                        return ARRAY_SIZE(gvt_broadwell_reg_info);
+                default:
+			return 0;
+        }
 
-#define _GEN6_GDRST			0x941c
-
-#endif
+        return 0;
+}
