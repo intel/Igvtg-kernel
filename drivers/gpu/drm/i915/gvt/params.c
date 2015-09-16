@@ -26,4 +26,16 @@
 struct gvt_kernel_params gvt = {
 	.enable = true,
 	.debug = 0,
+	.dom0_low_gm_sz = 96,
+	.dom0_high_gm_sz = 384,
+	.dom0_fence_sz = 4,
 };
+
+module_param_named(dom0_low_gm_sz, gvt.dom0_low_gm_sz, int, 0600);
+MODULE_PARM_DESC(dom0_low_gm_sz, "Amount of aperture size of DOM0");
+
+module_param_named(dom0_high_gm_sz, gvt.dom0_high_gm_sz, int, 0600);
+MODULE_PARM_DESC(dom0_high_gm_sz, "Amount of high memory size of DOM0");
+
+module_param_named(dom0_fence_sz, gvt.dom0_fence_sz, int, 0600);
+MODULE_PARM_DESC(dom0_fence_sz, "Amount of fence size of DOM0");

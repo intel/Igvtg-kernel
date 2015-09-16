@@ -234,6 +234,7 @@ static void clean_pgt_device(struct pgt_device *pdev)
 {
 	clean_service_thread(pdev);
 	clean_initial_mmio_state(pdev);
+	gvt_clean_resource_allocator(pdev);
 }
 
 static bool init_pgt_device(struct pgt_device *pdev, struct drm_i915_private *dev_priv)
@@ -245,6 +246,8 @@ static bool init_pgt_device(struct pgt_device *pdev, struct drm_i915_private *de
 
 	if (!init_initial_mmio_state(pdev))
 		goto err;
+
+	gvt_init_resource_allocator(pdev);
 
 	if (!init_service_thread(pdev))
 		goto err;

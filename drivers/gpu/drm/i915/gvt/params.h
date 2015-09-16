@@ -34,4 +34,12 @@ struct gvt_kernel_params {
 
 extern struct gvt_kernel_params gvt;
 
+struct gvt_instance_info {
+	u32 domid;
+	u32 low_gm_sz;
+	u32 high_gm_sz;
+	u32 fence_sz;
+	s32 primary;
+};
+
 #endif
