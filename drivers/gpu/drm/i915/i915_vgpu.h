@@ -163,8 +163,9 @@ struct vgt_if {
 	uint32_t  rsv6[0x200-25];    /* pad to one page */
 } __packed;
 
-#define vgtif_reg(x) \
-	_MMIO((VGT_PVINFO_PAGE + (long)&((struct vgt_if *)NULL)->x))
+#define _vgtif_reg(x) \
+	((VGT_PVINFO_PAGE + (long)&((struct vgt_if *)NULL)->x))
+#define vgtif_reg(x) _MMIO(_vgtif_reg(x))
 
 extern void i915_check_vgpu(struct drm_device *dev);
 extern int intel_vgt_balloon(struct drm_device *dev);

@@ -75,6 +75,17 @@ struct gvt_gm_node {
 	struct drm_mm_node *high_gm_node;
 };
 
+struct gvt_virtual_mmio_state {
+	void *vreg;
+	void *sreg;
+};
+
+struct gvt_virtual_cfg_state {
+	unsigned char space[GVT_CFG_SPACE_SZ];
+	bool bar_mapped[GVT_BAR_NUM];
+	u64 bar_size[GVT_BAR_NUM];
+};
+
 struct gvt_virtual_gm_state {
 	u64 aperture_base;
 	void *aperture_base_va;
@@ -89,6 +100,8 @@ struct gvt_virtual_gm_state {
 
 struct gvt_virtual_device_state {
 	struct gvt_virtual_gm_state gm;
+	struct gvt_virtual_mmio_state mmio;
+	struct gvt_virtual_cfg_state cfg;
 };
 
 struct vgt_device {
@@ -96,6 +109,7 @@ struct vgt_device {
 	int vm_id;
 	struct pgt_device *pdev;
 	bool warn_untrack;
+	atomic_t active;
 	struct gvt_virtual_device_state state;
 };
 
@@ -358,5 +372,57 @@ extern bool gvt_setup_initial_mmio_state(struct pgt_device *pdev);
 
 extern void gvt_clean_mmio_emulation_state(struct pgt_device *pdev);
 extern bool gvt_setup_mmio_emulation_state(struct pgt_device *pdev);
+
+static inline void gvt_pci_bar_write_32(struct vgt_device *vgt, uint32_t bar_offset, uint32_t val)
+{
+	uint32_t* cfg_reg;
+
+	/* BAR offset should be 32 bits algiend */
+	cfg_reg = (u32 *)&vgt->state.cfg.space[bar_offset & ~3];
+
+	/* only write the bits 31-4, leave the 3-0 bits unchanged, as they are read-only */
+	*cfg_reg = (val & 0xFFFFFFF0) | (*cfg_reg & 0xF);
+}
+
+static inline int gvt_pci_mmio_is_enabled(struct vgt_device *vgt)
+{
+	return vgt->state.cfg.space[GVT_REG_CFG_COMMAND] &
+		_REGBIT_CFG_COMMAND_MEMORY;
+}
+
+#define __vreg(vgt, off) (*(u32*)(vgt->state.mmio.vreg + off))
+#define __vreg8(vgt, off) (*(u8*)(vgt->state.mmio.vreg + off))
+#define __vreg16(vgt, off) (*(u16*)(vgt->state.mmio.vreg + off))
+#define __vreg64(vgt, off) (*(u64*)(vgt->state.mmio.vreg + off))
+
+#define __sreg(vgt, off) (*(u32*)(vgt->state.mmio.sreg + off))
+#define __sreg8(vgt, off) (*(u8*)(vgt->state.mmio.sreg + off))
+#define __sreg16(vgt, off) (*(u16*)(vgt->state.mmio.sreg + off))
+#define __sreg64(vgt, off) (*(u64*)(vgt->state.mmio.sreg + off))
+
+static inline void gvt_set_instance_online(struct vgt_device *vgt)
+{
+	atomic_set(&vgt->active, 1);
+}
+
+static inline void gvt_set_instance_offline(struct vgt_device *vgt)
+{
+	atomic_set(&vgt->active, 0);
+}
+
+static inline bool gvt_instance_is_online(struct vgt_device *vgt)
+{
+	return atomic_read(&vgt->active);
+}
+
+#define for_each_online_instance(pdev, vgt, id) \
+       idr_for_each_entry(&pdev->instance_idr, vgt, id) \
+               if (gvt_instance_is_online(vgt))
+
+extern void gvt_init_shadow_mmio_register(struct vgt_device *pdev);
+extern void gvt_init_virtual_mmio_register(struct vgt_device *pdev);
+extern struct vgt_device *gvt_create_instance(struct pgt_device *pdev,
+		struct gvt_instance_info *info);
+extern void gvt_destroy_instance(struct vgt_device *vgt);
 
 #endif

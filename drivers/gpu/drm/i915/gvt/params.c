@@ -25,6 +25,7 @@
 
 struct gvt_kernel_params gvt = {
 	.enable = true,
+	.primary = true,
 	.debug = 0,
 	.dom0_low_gm_sz = 96,
 	.dom0_high_gm_sz = 384,

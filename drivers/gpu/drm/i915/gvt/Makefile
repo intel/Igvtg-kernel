@@ -1,4 +1,4 @@
-GVT_SOURCE := gvt.o params.o aperture_gm.o mmio.o handlers.o fb_decoder.o
+GVT_SOURCE := gvt.o params.o aperture_gm.o mmio.o handlers.o instance.o fb_decoder.o
 
 ccflags-y			+= -I$(src) -I$(src)/.. -Wall -Werror -Wno-unused-function
 i915_gvt-y			:= $(GVT_SOURCE)

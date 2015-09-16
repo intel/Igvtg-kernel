@@ -288,3 +288,35 @@ err:
 	gvt_clean_mmio_emulation_state(pdev);
 	return false;
 }
+
+void gvt_init_virtual_mmio_register(struct vgt_device *vgt)
+{
+	struct pgt_device *pdev = vgt->pdev;
+	int i;
+
+        for (i = 0; i < pdev->mmio_size; i += sizeof(u32)) {
+                /*
+                 * skip the area of VGT PV INFO PAGE because we need keep
+                 * its content across Dom0 S3.
+                */
+                if (i >= VGT_PVINFO_PAGE &&
+                        i < VGT_PVINFO_PAGE + VGT_PVINFO_SIZE)
+                        continue;
+
+                __vreg(vgt, i) = pdev->initial_mmio_state[REG_INDEX(i)];
+        }
+
+        /* set the bit 0:2 (Thread C-State) to C0
+         * TODO: consider other bit 3:31
+         */
+        __vreg(vgt, _GEN6_GT_THREAD_STATUS_REG) = 0;
+
+        /* set the bit 0:2(Core C-State ) to C0 */
+        __vreg(vgt, _GEN6_GT_CORE_STATUS) = 0;
+}
+
+void gvt_init_shadow_mmio_register(struct vgt_device *vgt)
+{
+	struct gvt_virtual_device_state *state = &vgt->state;
+        memcpy (state->mmio.sreg, vgt->pdev->initial_mmio_state, vgt->pdev->mmio_size);
+}

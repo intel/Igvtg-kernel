@@ -27,12 +27,35 @@
 #define GVT_CFG_SPACE_SZ	256
 #define GVT_BAR_NUM		4
 
-#define GVT_REG_CFG_SPACE_BAR0	0x10
-#define GVT_REG_CFG_SPACE_BAR1	0x18
-#define GVT_REG_CFG_SPACE_BAR2	0x20
+#define GVT_PCI_CLASS_VGA			0x03
+#define GVT_PCI_CLASS_VGA_OTHER			0x80
+
+#define GVT_REG_CFG_VENDOR_ID                   0x00
+#define GVT_REG_CFG_COMMAND                     0x04
+#define _REGBIT_CFG_COMMAND_IO                  (1 << 0)
+#define _REGBIT_CFG_COMMAND_MEMORY              (1 << 1)
+#define _REGBIT_CFG_COMMAND_MASTER              (1 << 2)
+#define GVT_REG_CFG_CLASS_PROG_IF               0x09
+#define GVT_REG_CFG_SUB_CLASS_CODE              0x0A
+#define GVT_REG_CFG_CLASS_CODE                  0x0B
+#define GVT_REG_CFG_SPACE_BAR0                  0x10
+#define GVT_REG_CFG_SPACE_BAR1                  0x18
+#define GVT_REG_CFG_SPACE_BAR2                  0x20
+#define GVT_REG_CFG_SPACE_BAR_ROM               0x30
+#define GVT_REG_CFG_SPACE_MSAC                  0x62
+#define GVT_REG_CFG_SWSCI_TRIGGER               0xE8
+#define _REGBIT_CFG_SWSCI_SCI_SELECT            (1 << 15)
+#define _REGBIT_CFG_SWSCI_SCI_TRIGGER           1
+#define GVT_REG_CFG_OPREGION                    0xFC
+
+#define _REG_GMCH_CONTROL               0x50
+#define    _REGBIT_BDW_GMCH_GMS_SHIFT   8
+#define    _REGBIT_BDW_GMCH_GMS_MASK    0xff
 
 #define _PCH_GMBUS2			0xc5108
 
 #define _GEN6_GDRST			0x941c
+#define _GEN6_GT_THREAD_STATUS_REG	0x13805c
+#define _GEN6_GT_CORE_STATUS		0x138060
 
 #endif
