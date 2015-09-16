@@ -42,16 +42,38 @@
 	INTEL_VGT_IF_VERSION_ENCODE(VGT_VERSION_MAJOR, VGT_VERSION_MINOR)
 
 /*
- * notifications from guest to vgpu device model
+ * The information set by the guest gfx driver, through the display_ready field
+ */
+#define    VGT_DRV_DISPLAY_NOT_READY	(0 << 0)
+#define    VGT_DRV_DISPLAY_READY	(1 << 0)	/* ready for display switch */
+#define    VGT_DRV_LEGACY_VGA_MODE	(1 << 1)	/* in the legacy VGA mode */
+
+/*
+ * guest-to-vgt notifications
  */
 enum vgt_g2v_type {
-	VGT_G2V_PPGTT_L3_PAGE_TABLE_CREATE = 2,
+	VGT_G2V_DISPLAY_REFRESH,
+	VGT_G2V_SET_POINTER_SHAPE,
+	VGT_G2V_PPGTT_L3_PAGE_TABLE_CREATE,
 	VGT_G2V_PPGTT_L3_PAGE_TABLE_DESTROY,
 	VGT_G2V_PPGTT_L4_PAGE_TABLE_CREATE,
 	VGT_G2V_PPGTT_L4_PAGE_TABLE_DESTROY,
-	VGT_G2V_EXECLIST_CONTEXT_CREATE,
-	VGT_G2V_EXECLIST_CONTEXT_DESTROY,
+	VGT_G2V_EXECLIST_CONTEXT_ELEMENT_CREATE,
+	VGT_G2V_EXECLIST_CONTEXT_ELEMENT_DESTROY,
 	VGT_G2V_MAX,
+};
+
+/*
+ * vgt-to-guest notifications
+ */
+enum vgt_v2g_type {
+	VGT_V2G_SET_HW_CURSOR,
+	VGT_V2G_SET_SW_CURSOR,
+	VGT_V2G_MAX,
+};
+
+enum vgt_caps_type {
+	VGT_CAPS_PREEMPTION = (1 << 0),
 };
 
 struct vgt_if {
@@ -59,7 +81,8 @@ struct vgt_if {
 	uint16_t version_major;
 	uint16_t version_minor;
 	uint32_t vgt_id;	/* ID of vGT instance */
-	uint32_t rsv1[12];	/* pad to offset 0x40 */
+	uint32_t vgt_caps;     /* VGT capabilties */
+	uint32_t rsv1[11];	/* pad to offset 0x40 */
 	/*
 	 *  Data structure to describe the balooning info of resources.
 	 *  Each VM can only have one portion of continuous area for now.
@@ -85,13 +108,44 @@ struct vgt_if {
 	/*
 	 * The bottom half page is for response from Gfx driver to hypervisor.
 	 */
-	uint32_t rsv4;
-	uint32_t display_ready;	/* ready for display owner switch */
+	uint16_t  drv_version_major;
+	uint16_t  drv_version_minor;
+	uint32_t  display_ready;/* ready for display owner switch */
+	/*
+	 * driver reported status/error code
+	 *     0: if the avail_rs is sufficient to driver
+	 *  Bit 2,1,0 set indicating
+	 *       Insufficient low_gmadr, high_gmadr, fence resources.
+	 *  Other bits are reserved.
+	 */
+	uint32_t  rs_insufficient;
+	/*
+	 * The driver is required to update the following field with minimal
+	 * required resource size.
+	 */
+	uint32_t  min_low_gmadr;
+	uint32_t  min_high_gmadr;
+	uint32_t  min_fence_num;
 
-	uint32_t rsv5[4];
+	/*
+	 * notifications between guest and vgt
+	 */
+	uint32_t  g2v_notify;
+	uint32_t  v2g_notify;
 
-	uint32_t g2v_notify;
-	uint32_t rsv6[7];
+	/*
+	 * PPGTT PTE table info
+	 */
+	uint32_t  gmm_gtt_seg_base;
+	uint32_t  rsv4;
+	uint32_t  gmm_gtt_seg_size;
+	uint32_t  rsv5;
+
+	/*
+	 * Cursor hotspot info
+	 */
+	uint32_t  xhot;
+	uint32_t  yhot;
 
 	struct {
 		uint32_t lo;
@@ -101,15 +155,16 @@ struct vgt_if {
 	uint32_t execlist_context_descriptor_lo;
 	uint32_t execlist_context_descriptor_hi;
 
-	uint32_t  rsv7[0x200 - 24];    /* pad to one page */
+	/*
+	 * scratch space for debugging
+	 */
+	uint32_t  scratch;;
+
+	uint32_t  rsv6[0x200-25];    /* pad to one page */
 } __packed;
 
 #define vgtif_reg(x) \
 	_MMIO((VGT_PVINFO_PAGE + (long)&((struct vgt_if *)NULL)->x))
-
-/* vGPU display status to be used by the host side */
-#define VGT_DRV_DISPLAY_NOT_READY 0
-#define VGT_DRV_DISPLAY_READY     1  /* ready for display switch */
 
 extern void i915_check_vgpu(struct drm_device *dev);
 extern int intel_vgt_balloon(struct drm_device *dev);
