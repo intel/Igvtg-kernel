@@ -34,6 +34,8 @@
 #include "mpt.h"
 #include "fb_decoder.h"
 #include "mmio.h"
+#include "interrupt.h"
+#include "perf.h"
 
 #define GVT_MAX_VGPU 8
 
@@ -111,6 +113,7 @@ struct vgt_device {
 	bool warn_untrack;
 	atomic_t active;
 	struct gvt_virtual_device_state state;
+	struct gvt_statistics stat;
 };
 
 struct gvt_gm_allocator {
@@ -160,6 +163,9 @@ struct pgt_device {
 	u32 aux_table_index;
 
 	DECLARE_HASHTABLE(mmio_table, GVT_HASH_BITS);
+
+	struct gvt_irq_state irq_state;
+	struct pgt_statistics stat;
 };
 
 /* definitions for physical aperture/GM space */
