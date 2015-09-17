@@ -24,7 +24,33 @@
 #ifndef _GVT_HYPERCALL_H_
 #define _GVT_HYPERCALL_H_
 
+struct vgt_device;
+struct guest_page;
+
+enum map_type {
+        GVT_MAP_APERTURE,
+        GVT_MAP_OPREGION,
+};
+
 struct gvt_kernel_dm {
+        const char *name;
+        unsigned long (*g2m_pfn)(int vm_id, unsigned long g_pfn);
+        int (*pause_domain)(int vm_id);
+        int (*shutdown_domain)(int vm_id);
+        int (*map_mfn_to_gpfn)(int vm_id, unsigned long gpfn,
+                unsigned long mfn, int nr, int map, enum map_type type);
+        int (*set_trap_area)(struct vgt_device *vgt, uint64_t start, uint64_t end, bool map);
+        bool (*set_wp_pages)(struct vgt_device *vgt, struct guest_page *p);
+        bool (*unset_wp_pages)(struct vgt_device *vgt, struct guest_page *p);
+        int (*detect_host)(void);
+        int (*from_virt_to_mfn)(void *addr);
+        void *(*from_mfn_to_virt)(int mfn);
+        int (*inject_msi)(int vm_id, u32 addr, u16 data);
+        int (*hvm_init)(struct vgt_device *vgt);
+        void (*hvm_exit)(struct vgt_device *vgt);
+        void *(*gpa_to_va)(struct vgt_device *vgt, unsigned long gap);
+        bool (*read_va)(struct vgt_device *vgt, void *va, void *val, int len, int atomic);
+        bool (*write_va)(struct vgt_device *vgt, void *va, void *val, int len, int atomic);
 };
 
 #endif /* _GVT_HYPERCALL_H_ */

@@ -320,3 +320,197 @@ void gvt_init_shadow_mmio_register(struct vgt_device *vgt)
 	struct gvt_virtual_device_state *state = &vgt->state;
         memcpy (state->mmio.sreg, vgt->pdev->initial_mmio_state, vgt->pdev->mmio_size);
 }
+
+unsigned int pa_to_mmio_offset(struct vgt_device *vgt,
+               uint64_t pa)
+{
+#define PCI_BAR_ADDR_MASK (~0xFUL)  /* 4 LSB bits are not address */
+       return pa - ((*(u64*)(vgt->state.cfg.space + GVT_REG_CFG_SPACE_BAR0))
+                       & PCI_BAR_ADDR_MASK);
+}
+
+static inline bool valid_mmio_alignment(struct gvt_mmio_entry *e,
+               unsigned int offset, int bytes)
+{
+       if ((bytes >= e->align_bytes) && !(offset & (bytes - 1)))
+               return true;
+       gvt_err("invalid MMIO offset %08x len %d", offset, bytes);
+       return false;
+}
+
+bool gvt_default_mmio_read(struct vgt_device *vgt, unsigned int offset,
+               void *p_data, unsigned int bytes)
+{
+       memcpy(p_data, (char *)vgt->state.mmio.vreg + offset, bytes);
+       return true;
+}
+
+bool gvt_default_mmio_write(struct vgt_device *vgt, unsigned int offset,
+               void *p_data, unsigned int bytes)
+{
+       memcpy((char *)vgt->state.mmio.vreg + offset, p_data, bytes);
+       return true;
+}
+
+bool gvt_emulate_mmio_read(struct vgt_device *vgt, uint64_t pa, void *p_data,int bytes)
+{
+       struct pgt_device *pdev = vgt->pdev;
+       struct gvt_statistics *stat = &vgt->stat;
+       struct gvt_mmio_entry *mmio_entry;
+       unsigned int offset;
+       cycles_t t0, t1;
+       bool r;
+
+       t0 = get_cycles();
+
+       mutex_lock(&pdev->lock);
+
+       if (atomic_read(&vgt->gtt.n_write_protected_guest_page)) {
+               guest_page_t *gp;
+               gp = gvt_find_guest_page(vgt, pa >> PAGE_SHIFT);
+               if (gp) {
+                       memcpy(p_data, gp->vaddr + (pa & ~PAGE_MASK), bytes);
+                       mutex_unlock(&pdev->lock);
+                       return true;
+               }
+       }
+
+       offset = pa_to_mmio_offset(vgt, pa);
+
+       if (bytes > 8 || (offset & (bytes - 1)))
+               goto err;
+
+       if (reg_is_gtt(pdev, offset)) {
+               r = gtt_emulate_read(vgt, offset, p_data, bytes);
+               mutex_unlock(&pdev->lock);
+               return r;
+       }
+
+       if (!reg_is_mmio(pdev, offset + bytes))
+               goto err;
+
+       mmio_entry = find_mmio_entry(pdev, offset);
+       if (mmio_entry && mmio_entry->read) {
+               if (!valid_mmio_alignment(mmio_entry, offset, bytes))
+                       goto err;
+               if (!mmio_entry->read(vgt, offset, p_data, bytes))
+                       goto err;
+       } else
+               if (!gvt_default_mmio_read(vgt, offset, p_data, bytes))
+                       goto err;
+
+       if (!reg_is_tracked(pdev, offset) && vgt->warn_untrack) {
+               gvt_warn("[ vgt%d ] untracked MMIO read, offset %x len %d val 0x%x",
+                       vgt->vm_id, offset, bytes, *(u32 *)p_data);
+
+               if (offset == 0x206c) {
+                       printk("------------------------------------------\n");
+                       printk("VM(%d) likely triggers a gfx reset\n", vgt->vm_id);
+                       printk("Disable untracked MMIO warning for VM(%d)\n", vgt->vm_id);
+                       printk("------------------------------------------\n");
+                       vgt->warn_untrack = 0;
+               }
+       }
+
+       reg_set_accessed(pdev, offset);
+       mutex_unlock(&pdev->lock);
+
+       t1 = get_cycles();
+       stat->mmio_rcnt++;
+       stat->mmio_rcycles += t1 - t0;
+       return true;
+err:
+       gvt_err("[ vgt%d ] fail to emulate MMIO read, offset %08x len %d",
+                       vgt->id, offset, bytes);
+       mutex_unlock(&pdev->lock);
+       return false;
+}
+
+bool gvt_emulate_mmio_write(struct vgt_device *vgt, uint64_t pa,
+       void *p_data, int bytes)
+{
+       struct pgt_device *pdev = vgt->pdev;
+       struct gvt_mmio_entry *mmio_entry;
+       struct gvt_statistics *stat = &vgt->stat;
+       unsigned int offset;
+       u32 old_vreg = 0, old_sreg = 0;
+       cycles_t t0, t1;
+       bool r;
+
+       t0 = get_cycles();
+
+       mutex_lock(&pdev->lock);
+
+       if (atomic_read(&vgt->gtt.n_write_protected_guest_page)) {
+               guest_page_t *guest_page;
+               guest_page = gvt_find_guest_page(vgt, pa >> PAGE_SHIFT);
+               if (guest_page) {
+                       r = guest_page->handler(guest_page, pa, p_data, bytes);
+                       t1 = get_cycles();
+                       stat->wp_cycles += t1 - t0;
+                       stat->wp_cnt++;
+                       mutex_unlock(&pdev->lock);
+                       return r;
+               }
+       }
+
+       offset = pa_to_mmio_offset(vgt, pa);
+
+       /* FENCE registers / GTT entries(sometimes) are accessed in 8 bytes. */
+       if (bytes > 8 || (offset & (bytes - 1)))
+               goto err;
+
+       if (reg_is_gtt(pdev, offset)) {
+               r = gtt_emulate_write(vgt, offset, p_data, bytes);
+               mutex_unlock(&pdev->lock);
+               return r;
+       }
+
+       if (!reg_is_mmio(pdev, offset + bytes))
+               goto err;
+
+       if (reg_mode_ctl(pdev, offset)) {
+               old_vreg = __vreg(vgt, offset);
+               old_sreg = __sreg(vgt, offset);
+       }
+
+       if (!reg_is_tracked(pdev, offset) && vgt->warn_untrack) {
+               gvt_warn("[ vgt%d ] untracked MMIO write, offset %x len %d val 0x%x",
+                       vgt->vm_id, offset, bytes, *(u32 *)p_data);
+       }
+
+       mmio_entry = find_mmio_entry(pdev, offset);
+       if (mmio_entry && mmio_entry->write ) {
+               if (!valid_mmio_alignment(mmio_entry, offset, bytes))
+                       goto err;
+               if (!mmio_entry->write(vgt, offset, p_data, bytes))
+                       goto err;
+       } else
+               if (!gvt_default_mmio_write(vgt, offset, p_data, bytes))
+                       goto err;
+
+       /* higher 16bits of mode ctl regs are mask bits for change */
+       if (reg_mode_ctl(pdev, offset)) {
+               u32 mask = __vreg(vgt, offset) >> 16;
+               /*
+                * share the global mask among VMs, since having one VM touch a bit
+                * not changed by another VM should be still saved/restored later
+                */
+               reg_aux_mode_mask(pdev, offset) |= mask << 16;
+               __vreg(vgt, offset) = (old_vreg & ~mask) | (__vreg(vgt, offset) & mask);
+               __sreg(vgt, offset) = (old_sreg & ~mask) | (__sreg(vgt, offset) & mask);
+       }
+
+       reg_set_accessed(pdev, offset);
+       mutex_unlock(&pdev->lock);
+
+       t1 = get_cycles();
+       stat->mmio_wcycles += t1 - t0;
+       stat->mmio_wcnt++;
+       return true;
+err:
+       gvt_err("[ vgt%d ] fail to emulate MMIO write, offset %08x len %d",
+                       vgt->id, offset, bytes);
+       mutex_unlock(&pdev->lock);
+       return false;
+}

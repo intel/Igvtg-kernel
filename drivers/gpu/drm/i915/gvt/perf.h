@@ -28,6 +28,10 @@ struct gvt_statistics {
 	u64	irq_num;
 	u64	events[GVT_EVENT_MAX];
 	u64	last_injection;
+	u64	mmio_rcnt;
+	u64	mmio_wcnt;
+	u64	mmio_wcycles;
+	u64	mmio_rcycles;
 	u64	gtt_mmio_rcnt;
 	u64	gtt_mmio_wcnt;
 	u64	gtt_mmio_wcycles;

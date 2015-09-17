@@ -31,6 +31,11 @@ struct gvt_host gvt_host;
 extern struct gvt_kernel_dm xengt_kdm;
 extern struct gvt_kernel_dm kvmgt_kdm;
 
+static struct gvt_io_emulation_ops default_io_emulation_ops = {
+	.emulate_mmio_read = gvt_emulate_mmio_read,
+	.emulate_mmio_write = gvt_emulate_mmio_write,
+};
+
 static const char *supported_hypervisors[] = {
 	[GVT_HYPERVISOR_TYPE_XEN] = "Xen Hypervisor",
 	[GVT_HYPERVISOR_TYPE_KVM] = "KVM",
@@ -72,6 +77,7 @@ static bool gvt_init_host(void)
 	gvt_info("Running with hypervisor %s in host mode",
 			supported_hypervisors[host->hypervisor_type]);
 
+	host->emulate_ops = &default_io_emulation_ops;
 	idr_init(&host->device_idr);
 	mutex_init(&host->device_idr_lock);
 

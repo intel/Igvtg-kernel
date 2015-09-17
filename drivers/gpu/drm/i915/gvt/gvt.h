@@ -31,7 +31,6 @@
 #include "params.h"
 #include "reg.h"
 #include "hypercall.h"
-#include "mpt.h"
 #include "fb_decoder.h"
 #include "mmio.h"
 #include "interrupt.h"
@@ -52,12 +51,20 @@ enum {
 	GVT_HYPERVISOR_TYPE_KVM,
 };
 
+struct gvt_io_emulation_ops {
+	bool (*emulate_mmio_read)(struct vgt_device *, uint64_t, void *, int);
+	bool (*emulate_mmio_write)(struct vgt_device *, uint64_t, void *, int);
+	bool (*emulate_cfg_read)(struct vgt_device *, unsigned int, void *, int);
+	bool (*emulate_cfg_write)(struct vgt_device *, unsigned int, void *, int);
+};
+
 struct gvt_host {
 	bool initialized;
 	int hypervisor_type;
 	struct mutex device_idr_lock;
 	struct idr device_idr;
 	struct gvt_kernel_dm *kdm;
+	struct gvt_io_emulation_ops *emulate_ops;
 };
 
 extern struct gvt_host gvt_host;
@@ -578,5 +585,7 @@ static inline u32 h2g_gtt_index(struct vgt_device *vgt, uint32_t h_index)
 
 	return (u32)(h2g_gm(vgt, h_addr) >> GTT_PAGE_SHIFT);
 }
+
+#include "mpt.h"
 
 #endif

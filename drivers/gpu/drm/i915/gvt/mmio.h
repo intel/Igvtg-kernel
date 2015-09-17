@@ -84,4 +84,8 @@ struct gvt_reg_info {
 extern struct gvt_reg_info gvt_general_reg_info[];
 extern struct gvt_reg_info gvt_broadwell_reg_info[];
 extern int gvt_get_reg_num(int type);
+
+bool gvt_emulate_mmio_read(struct vgt_device *vgt, uint64_t pa, void *p_data,int bytes);
+bool gvt_emulate_mmio_write(struct vgt_device *vgt, uint64_t pa, void *p_data,int bytes);
+
 #endif
