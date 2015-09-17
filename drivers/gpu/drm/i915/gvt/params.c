@@ -30,6 +30,9 @@ struct gvt_kernel_params gvt = {
 	.dom0_low_gm_sz = 96,
 	.dom0_high_gm_sz = 384,
 	.dom0_fence_sz = 4,
+	.preallocated_shadow_pages = -1,
+	.preallocated_oos_pages = -1,
+	.spt_out_of_sync = false,
 };
 
 module_param_named(dom0_low_gm_sz, gvt.dom0_low_gm_sz, int, 0600);
@@ -40,3 +43,12 @@ MODULE_PARM_DESC(dom0_high_gm_sz, "Amount of high memory size of DOM0");
 
 module_param_named(dom0_fence_sz, gvt.dom0_fence_sz, int, 0600);
 MODULE_PARM_DESC(dom0_fence_sz, "Amount of fence size of DOM0");
+
+module_param_named(preallocated_shadow_pages, gvt.preallocated_shadow_pages, int, 0600);
+MODULE_PARM_DESC(preallocated_shadow_pages, "Amount of pre-allocated shadow pages");
+
+module_param_named(preallocated_oos_pages, gvt.preallocated_oos_pages, int, 0600);
+MODULE_PARM_DESC(preallocated_oos_pages, "Amount of pre-allocated oos pages");
+
+module_param_named(spt_out_of_sync, gvt.spt_out_of_sync, bool, 0600);
+MODULE_PARM_DESC(spt_out_of_sync, "Enable SPT out of sync");

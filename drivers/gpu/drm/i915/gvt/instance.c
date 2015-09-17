@@ -106,6 +106,7 @@ static void init_virtual_cfg_space_state(struct vgt_device *vgt,
 
 static void destroy_virtual_gm_state(struct vgt_device *vgt)
 {
+	gvt_clean_vgtt(vgt);
 	gvt_free_gm_and_fence_resource(vgt);
 }
 
@@ -151,11 +152,17 @@ static bool create_virtual_gm_state(struct vgt_device *vgt,
 
 	populate_pvinfo_page(vgt);
 
+	if (!gvt_init_vgtt(vgt)) {
+		gvt_err("fail to init vgtt");
+		return false;
+	}
+
 	return true;
 }
 
 static void destroy_virtual_device_state(struct vgt_device *vgt)
 {
+	gvt_clean_vgtt(vgt);
 	destroy_virtual_mmio_state(vgt);
 	destroy_virtual_gm_state(vgt);
 }

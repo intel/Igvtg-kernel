@@ -24,6 +24,7 @@
 #ifndef _GVT_MPT_H_
 #define _GVT_MPT_H_
 
+struct guest_page;
 struct vgt_device;
 
 static inline unsigned long hypervisor_g2m_pfn(struct vgt_device *vgt,
@@ -61,6 +62,16 @@ static inline int hypervisor_virt_to_mfn(void *addr)
 static inline void *hypervisor_mfn_to_virt(int mfn)
 {
 	return NULL;
+}
+
+static inline int hypervisor_set_wp_pages(struct vgt_device *vgt, struct guest_page *p)
+{
+        return 0;
+}
+
+static inline int hypervisor_unset_wp_pages(struct vgt_device *vgt, struct guest_page *p)
+{
+        return 0;
 }
 
 static inline void hypervisor_inject_msi(struct vgt_device *vgt)

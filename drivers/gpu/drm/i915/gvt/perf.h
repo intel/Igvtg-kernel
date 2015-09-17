@@ -28,12 +28,35 @@ struct gvt_statistics {
 	u64	irq_num;
 	u64	events[GVT_EVENT_MAX];
 	u64	last_injection;
+	u64	gtt_mmio_rcnt;
+	u64	gtt_mmio_wcnt;
+	u64	gtt_mmio_wcycles;
+	u64	gtt_mmio_rcycles;
+	u64	wp_cnt;
+	u64	wp_cycles;
+	u64	ppgtt_wp_cnt;
+	u64	ppgtt_wp_cycles;
+	u64	spt_find_hit_cnt;
+	u64	spt_find_hit_cycles;
+	u64	spt_find_miss_cnt;
+	u64	spt_find_miss_cycles;
+	u64	gpt_find_hit_cnt;
+	u64	gpt_find_hit_cycles;
+	u64	gpt_find_miss_cnt;
+	u64	gpt_find_miss_cycles;
+
 };
 
 struct pgt_statistics {
 	u64	irq_num;
 	u64	irq_delay_cycles;
 	u64	events[GVT_EVENT_MAX];
+	u64	oos_page_cur_avail_cnt;
+	u64	oos_page_min_avail_cnt;
+	u64	oos_page_steal_cnt;
+	u64	oos_page_attach_cnt;
+	u64	oos_page_detach_cnt;
+
 };
 
 #endif

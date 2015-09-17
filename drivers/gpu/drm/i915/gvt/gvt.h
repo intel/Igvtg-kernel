@@ -36,6 +36,7 @@
 #include "mmio.h"
 #include "interrupt.h"
 #include "perf.h"
+#include "gtt.h"
 
 #define GVT_MAX_VGPU 8
 
@@ -114,6 +115,7 @@ struct vgt_device {
 	atomic_t active;
 	struct gvt_virtual_device_state state;
 	struct gvt_statistics stat;
+	struct gvt_vgtt_info gtt;
 };
 
 struct gvt_gm_allocator {
@@ -166,6 +168,8 @@ struct pgt_device {
 
 	struct gvt_irq_state irq_state;
 	struct pgt_statistics stat;
+
+	struct gvt_gtt_info gtt;
 };
 
 /* definitions for physical aperture/GM space */
@@ -366,6 +370,22 @@ static inline void gvt_mmio_write64(struct pgt_device *pdev,
 	I915_WRITE64(tmp, val);
 }
 
+static inline u64 gvt_read_gtt64(struct pgt_device *pdev, u32 index)
+{
+	struct gvt_device_info *info = &pdev->device_info;
+	unsigned int off = index << info->gtt_entry_size_shift;
+
+	return readq(pdev->gttmmio_va + info->gtt_start_offset + off);
+}
+
+static inline void gvt_write_gtt64(struct pgt_device *pdev, u32 index, u64 val)
+{
+	struct gvt_device_info *info = &pdev->device_info;
+	unsigned int off = index << info->gtt_entry_size_shift;
+
+	writeq(val, pdev->gttmmio_va + info->gtt_start_offset + off);
+}
+
 static inline void gvt_mmio_posting_read(struct pgt_device *pdev, u32 reg)
 {
 	struct drm_i915_private *dev_priv = pdev->dev_priv;
@@ -430,5 +450,133 @@ extern void gvt_init_virtual_mmio_register(struct vgt_device *pdev);
 extern struct vgt_device *gvt_create_instance(struct pgt_device *pdev,
 		struct gvt_instance_info *info);
 extern void gvt_destroy_instance(struct vgt_device *vgt);
+
+/* check whether a guest GM address is within the CPU visible range */
+static inline bool g_gm_is_visible(struct vgt_device *vgt, u64 g_addr)
+{
+	return (g_addr >= gvt_guest_visible_gm_base(vgt)) &&
+		(g_addr <= gvt_guest_visible_gm_end(vgt));
+}
+
+/* check whether a guest GM address is out of the CPU visible range */
+static inline bool g_gm_is_hidden(struct vgt_device *vgt, u64 g_addr)
+{
+	return (g_addr >= gvt_guest_hidden_gm_base(vgt)) &&
+		(g_addr <= gvt_guest_hidden_gm_end(vgt));
+}
+
+static inline bool g_gm_is_valid(struct vgt_device *vgt, u64 g_addr)
+{
+	return g_gm_is_visible(vgt, g_addr) || g_gm_is_hidden(vgt, g_addr);
+}
+
+/* check whether a host GM address is within the CPU visible range */
+static inline bool h_gm_is_visible(struct vgt_device *vgt, u64 h_addr)
+{
+	return (h_addr >= gvt_visible_gm_base(vgt)) &&
+		(h_addr <= gvt_visible_gm_end(vgt));
+}
+
+/* check whether a host GM address is out of the CPU visible range */
+static inline bool h_gm_is_hidden(struct vgt_device *vgt, u64 h_addr)
+{
+	return (h_addr >= gvt_hidden_gm_base(vgt)) &&
+		(h_addr <= gvt_hidden_gm_end(vgt));
+}
+
+static inline bool h_gm_is_valid(struct vgt_device *vgt, u64 h_addr)
+{
+	return h_gm_is_visible(vgt, h_addr) || h_gm_is_hidden(vgt, h_addr);
+}
+
+/* for a guest GM address, return the offset within the CPU visible range */
+static inline u64 g_gm_visible_offset(struct vgt_device *vgt, uint64_t g_addr)
+{
+	return g_addr - gvt_guest_visible_gm_base(vgt);
+}
+
+/* for a guest GM address, return the offset within the hidden range */
+static inline u64 g_gm_hidden_offset(struct vgt_device *vgt, uint64_t g_addr)
+{
+	return g_addr - gvt_guest_hidden_gm_base(vgt);
+}
+
+/* for a host GM address, return the offset within the CPU visible range */
+static inline u64 h_gm_visible_offset(struct vgt_device *vgt, uint64_t h_addr)
+{
+	return h_addr - gvt_visible_gm_base(vgt);
+}
+
+/* for a host GM address, return the offset within the hidden range */
+static inline u64 h_gm_hidden_offset(struct vgt_device *vgt, uint64_t h_addr)
+{
+	return h_addr - gvt_hidden_gm_base(vgt);
+}
+
+/* validate a gm address and related range size, translate it to host gm address */
+static inline int g2h_gm_range(struct vgt_device *vgt, u64 *addr, u32 size)
+{
+	ASSERT(addr);
+
+	if ((!g_gm_is_valid(vgt, *addr)) || (size && !g_gm_is_valid(vgt, *addr + size - 1))) {
+		gvt_err("VM(%d): invalid address range: g_addr(0x%llx), size(0x%x)\n",
+			vgt->vm_id, *addr, size);
+		return -EACCES;
+	}
+
+	if (g_gm_is_visible(vgt, *addr))	/* aperture */
+		*addr = gvt_visible_gm_base(vgt) +
+			g_gm_visible_offset(vgt, *addr);
+	else	/* hidden GM space */
+		*addr = gvt_hidden_gm_base(vgt) +
+			g_gm_hidden_offset(vgt, *addr);
+	return 0;
+}
+
+/* translate a guest gm address to host gm address */
+static inline int g2h_gm(struct vgt_device *vgt, u64 *addr)
+{
+	return g2h_gm_range(vgt, addr, 4);
+}
+
+/* translate a host gm address to guest gm address */
+static inline u64 h2g_gm(struct vgt_device *vgt, uint64_t h_addr)
+{
+	u64 g_addr;
+
+	ASSERT_NUM(h_gm_is_valid(vgt, h_addr), h_addr);
+
+	if (h_gm_is_visible(vgt, h_addr))
+		g_addr = gvt_guest_visible_gm_base(vgt) +
+			h_gm_visible_offset(vgt, h_addr);
+	else
+		g_addr = gvt_guest_hidden_gm_base(vgt) +
+			h_gm_hidden_offset(vgt, h_addr);
+
+	return g_addr;
+}
+
+#define reg_is_mmio(pdev, reg)	\
+	(reg >= 0 && reg < pdev->mmio_size)
+
+#define reg_is_gtt(pdev, reg)	\
+	(reg >= pdev->device_info.gtt_start_offset \
+	&& reg < pdev->device_info.gtt_end_offset)
+
+static inline u32 g2h_gtt_index(struct vgt_device *vgt, uint32_t g_index)
+{
+	u64 addr = g_index << GTT_PAGE_SHIFT;
+
+	g2h_gm(vgt, &addr);
+
+	return (u32)(addr >> GTT_PAGE_SHIFT);
+}
+
+static inline u32 h2g_gtt_index(struct vgt_device *vgt, uint32_t h_index)
+{
+	u64 h_addr = h_index << GTT_PAGE_SHIFT;
+
+	return (u32)(h2g_gm(vgt, h_addr) >> GTT_PAGE_SHIFT);
+}
 
 #endif

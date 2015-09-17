@@ -114,6 +114,10 @@ static bool init_device_info(struct pgt_device *pdev)
 	printk("        gtt_start_offset: %x\n", info->gtt_start_offset);
 	printk("        gtt_end_offset: %x\n", info->gtt_end_offset);
 
+	if (!gvt_init_avail_gtt_size(pdev)) {
+		gvt_err("fail to get avail gtt size");
+		return false;
+	}
 	return true;
 }
 
@@ -238,6 +242,7 @@ static bool init_service_thread(struct pgt_device *pdev)
 static void clean_pgt_device(struct pgt_device *pdev)
 {
 	clean_service_thread(pdev);
+	gvt_clean_gtt(pdev);
 	gvt_irq_exit(pdev);
 	gvt_clean_mmio_emulation_state(pdev);
 	clean_initial_mmio_state(pdev);
@@ -260,6 +265,9 @@ static bool init_pgt_device(struct pgt_device *pdev, struct drm_i915_private *de
 		goto err;
 
 	if (!gvt_irq_init(pdev))
+		goto err;
+
+	if (!gvt_init_gtt(pdev))
 		goto err;
 
 	if (!init_service_thread(pdev))

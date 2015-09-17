@@ -31,6 +31,9 @@ struct gvt_kernel_params {
 	int dom0_low_gm_sz;
 	int dom0_high_gm_sz;
 	int dom0_fence_sz;
+	int preallocated_shadow_pages;
+	int preallocated_oos_pages;
+	bool spt_out_of_sync;
 };
 
 extern struct gvt_kernel_params gvt;
