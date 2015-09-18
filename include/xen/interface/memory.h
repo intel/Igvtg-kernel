@@ -9,6 +9,7 @@
 #ifndef __XEN_PUBLIC_MEMORY_H__
 #define __XEN_PUBLIC_MEMORY_H__
 
+#include <xen/interface/event_channel.h>
 #include <linux/spinlock.h>
 
 /*
@@ -141,6 +142,11 @@ struct xen_machphys_mfn_list {
 DEFINE_GUEST_HANDLE_STRUCT(xen_machphys_mfn_list);
 
 /*
+ * Returns the maximum GPFN in use by the guest, or -ve errcode on failure.
+ */
+#define XENMEM_maximum_gpfn         14
+
+/*
  * Returns the location in virtual address space of the machine_to_phys
  * mapping table. Architectures which do not have a m2p table, or which do not
  * map it by default into guest address space, do not implement this command.
@@ -262,5 +268,27 @@ struct xen_remove_from_physmap {
     xen_pfn_t gpfn;
 };
 DEFINE_GUEST_HANDLE_STRUCT(xen_remove_from_physmap);
+
+/*
+ * Translate the given guest PFNs to MFNs
+ */
+#define XENMEM_get_mfn_from_pfn    25
+struct xen_get_mfn_from_pfn {
+    /*
+     * Pointer to buffer to fill with list of pfn.
+     * for IN, it contains the guest PFN that need to translated
+     * for OUT, it contains the translated MFN. or INVALID_MFN if no valid translation
+     */
+    GUEST_HANDLE(ulong) pfn_list;
+
+    /*
+     * IN: Size of the pfn_array.
+     */
+    unsigned int nr_pfns;
+
+    /* IN: which domain */
+    domid_t domid;
+};
+DEFINE_GUEST_HANDLE_STRUCT(xen_get_mfn_from_pfn);
 
 #endif /* __XEN_PUBLIC_MEMORY_H__ */

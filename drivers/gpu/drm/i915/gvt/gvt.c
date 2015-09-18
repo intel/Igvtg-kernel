@@ -21,12 +21,14 @@
  * SOFTWARE.
  */
 
+#include <linux/types.h>
 #include <xen/xen.h>
 #include <linux/kthread.h>
 
 #include "gvt.h"
 
 struct gvt_host gvt_host;
+EXPORT_SYMBOL(gvt_host);
 
 extern struct gvt_kernel_dm xengt_kdm;
 extern struct gvt_kernel_dm kvmgt_kdm;
@@ -34,6 +36,13 @@ extern struct gvt_kernel_dm kvmgt_kdm;
 static struct gvt_io_emulation_ops default_io_emulation_ops = {
 	.emulate_mmio_read = gvt_emulate_mmio_read,
 	.emulate_mmio_write = gvt_emulate_mmio_write,
+};
+
+unsigned int pa_to_mmio_offset(struct vgt_device *vgt,
+               uint64_t pa);
+
+static struct gvt_mpt_ops default_export_mpt_ops = {
+	.pa_to_mmio_offset = pa_to_mmio_offset,
 };
 
 static const char *supported_hypervisors[] = {
@@ -78,6 +87,7 @@ static bool gvt_init_host(void)
 			supported_hypervisors[host->hypervisor_type]);
 
 	host->emulate_ops = &default_io_emulation_ops;
+	host->mpt_ops = &default_export_mpt_ops;
 	idr_init(&host->device_idr);
 	mutex_init(&host->device_idr_lock);
 

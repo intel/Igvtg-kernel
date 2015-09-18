@@ -58,6 +58,10 @@ struct gvt_io_emulation_ops {
 	bool (*emulate_cfg_write)(struct vgt_device *, unsigned int, void *, int);
 };
 
+struct gvt_mpt_ops {
+	unsigned int (*pa_to_mmio_offset)(struct vgt_device *, u64);
+};
+
 struct gvt_host {
 	bool initialized;
 	int hypervisor_type;
@@ -65,6 +69,7 @@ struct gvt_host {
 	struct idr device_idr;
 	struct gvt_kernel_dm *kdm;
 	struct gvt_io_emulation_ops *emulate_ops;
+	struct gvt_mpt_ops *mpt_ops;
 };
 
 extern struct gvt_host gvt_host;
@@ -123,6 +128,9 @@ struct vgt_device {
 	struct gvt_virtual_device_state state;
 	struct gvt_statistics stat;
 	struct gvt_vgtt_info gtt;
+	void *hypervisor_data;
+	unsigned long low_mem_max_gpfn;
+	atomic_t crashing;
 };
 
 struct gvt_gm_allocator {
@@ -421,6 +429,12 @@ static inline int gvt_pci_mmio_is_enabled(struct vgt_device *vgt)
 {
 	return vgt->state.cfg.space[GVT_REG_CFG_COMMAND] &
 		_REGBIT_CFG_COMMAND_MEMORY;
+}
+
+static inline uint64_t gvt_mmio_bar_base(struct vgt_device *vgt)
+{
+        char *cfg_space = &vgt->state.cfg.space[0];
+        return *(u64 *)(cfg_space + GVT_REG_CFG_SPACE_BAR0);
 }
 
 #define __vreg(vgt, off) (*(u32*)(vgt->state.mmio.vreg + off))

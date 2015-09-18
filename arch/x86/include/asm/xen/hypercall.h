@@ -459,6 +459,13 @@ HYPERVISOR_hvm_op(int op, void *arg)
 }
 
 static inline int
+HYPERVISOR_domctl(
+        struct xen_domctl *arg)
+{
+        return _hypercall1(int, domctl, arg);
+}
+
+static inline int
 HYPERVISOR_tmem_op(
 	struct tmem_op *op)
 {

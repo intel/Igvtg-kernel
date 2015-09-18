@@ -291,4 +291,9 @@ config XEN_SYMS
 config XEN_HAVE_VPMU
        bool
 
+config XENGT
+        tristate "Xen Dom0 support for i915 gvt device model"
+        depends on XEN_DOM0 && I915_GVT
+        default m
+
 endmenu
