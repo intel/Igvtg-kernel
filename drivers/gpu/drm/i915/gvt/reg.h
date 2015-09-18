@@ -48,6 +48,22 @@
 #define _REGBIT_CFG_SWSCI_SCI_TRIGGER           1
 #define GVT_REG_CFG_OPREGION                    0xFC
 
+#define GVT_OPREGION_PAGES                      2
+#define GVT_OPREGION_PORDER                     1
+#define GVT_OPREGION_SIZE                       (8 * 1024)
+#define GVT_OPREGION_REG_CLID                   0x1AC
+#define GVT_OPREGION_REG_SCIC                   0x200
+#define _REGBIT_OPREGION_SCIC_FUNC_MASK         0x1E
+#define _REGBIT_OPREGION_SCIC_FUNC_SHIFT        1
+#define _REGBIT_OPREGION_SCIC_SUBFUNC_MASK      0xFF00
+#define _REGBIT_OPREGION_SCIC_SUBFUNC_SHIFT     8
+#define _REGBIT_OPREGION_SCIC_EXIT_MASK         0xE0
+#define GVT_OPREGION_SCIC_F_GETBIOSDATA         4
+#define GVT_OPREGION_SCIC_F_GETBIOSCALLBACKS    6
+#define GVT_OPREGION_SCIC_SF_SUPPRTEDCALLS      0
+#define GVT_OPREGION_SCIC_SF_REQEUSTEDCALLBACKS 1
+#define GVT_OPREGION_REG_PARM			0x204
+
 #define _REG_GMCH_CONTROL               0x50
 #define    _REGBIT_BDW_GMCH_GMS_SHIFT   8
 #define    _REGBIT_BDW_GMCH_GMS_MASK    0xff

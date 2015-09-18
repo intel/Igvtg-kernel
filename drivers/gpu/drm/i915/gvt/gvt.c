@@ -36,6 +36,8 @@ extern struct gvt_kernel_dm kvmgt_kdm;
 static struct gvt_io_emulation_ops default_io_emulation_ops = {
 	.emulate_mmio_read = gvt_emulate_mmio_read,
 	.emulate_mmio_write = gvt_emulate_mmio_write,
+	.emulate_cfg_read = gvt_emulate_cfg_read,
+	.emulate_cfg_write = gvt_emulate_cfg_write,
 };
 
 unsigned int pa_to_mmio_offset(struct vgt_device *vgt,

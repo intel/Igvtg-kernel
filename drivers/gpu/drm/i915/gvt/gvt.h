@@ -36,6 +36,7 @@
 #include "interrupt.h"
 #include "perf.h"
 #include "gtt.h"
+#include "cfg_space.h"
 
 #define GVT_MAX_VGPU 8
 
@@ -99,6 +100,7 @@ struct gvt_virtual_cfg_state {
 	unsigned char space[GVT_CFG_SPACE_SZ];
 	bool bar_mapped[GVT_BAR_NUM];
 	u64 bar_size[GVT_BAR_NUM];
+	void *opregion_va;
 };
 
 struct gvt_virtual_gm_state {
@@ -599,6 +601,14 @@ static inline u32 h2g_gtt_index(struct vgt_device *vgt, uint32_t h_index)
 
 	return (u32)(h2g_gm(vgt, h_addr) >> GTT_PAGE_SHIFT);
 }
+
+/* get the bits high:low of the data, high and low is starting from zero*/
+#define GVT_GET_BITS(data, high, low)   (((data) & ((1 << ((high) + 1)) - 1)) >> (low))
+/* get one bit of the data, bit is starting from zeor */
+#define GVT_GET_BIT(data, bit)          GVT_GET_BITS(data, bit, bit)
+
+int gvt_hvm_map_aperture(struct vgt_device *vgt, int map);
+int gvt_hvm_set_trap_area(struct vgt_device *vgt, int map);
 
 #include "mpt.h"
 
