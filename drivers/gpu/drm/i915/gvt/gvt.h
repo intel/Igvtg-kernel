@@ -38,6 +38,7 @@
 #include "gtt.h"
 #include "cfg_space.h"
 #include "opregion.h"
+#include "fb_decoder.h"
 
 #define GVT_MAX_VGPU 8
 
