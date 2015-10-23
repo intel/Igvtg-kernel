@@ -3646,7 +3646,7 @@ void (*postclose) (struct drm_device *, struct drm_file *);</synopsis>
 	plane properties to default value, so that a subsequent open of the
 	device will not inherit state from the previous user. It can also be
 	used to execute delayed power switching state changes, e.g. in
-	conjunction with the vga-switcheroo infrastructure. Beyond that KMS
+	conjunction with the vga_switcheroo infrastructure. Beyond that KMS
 	drivers should not do any further cleanup. Only legacy UMS drivers might
 	need to clean up device state so that the vga console or an independent
 	fbdev driver could take over.
@@ -4051,6 +4051,7 @@ int num_ioctls;</synopsis>
 	<title>High Definition Audio</title>
 !Pdrivers/gpu/drm/i915/intel_audio.c High Definition Audio over HDMI and Display Port
 !Idrivers/gpu/drm/i915/intel_audio.c
+!Iinclude/drm/i915_component.h
       </sect2>
       <sect2>
 	<title>Panel Self Refresh PSR (PSR/SRD)</title>
@@ -4237,6 +4238,20 @@ int num_ioctls;</synopsis>
 !Idrivers/gpu/drm/i915/i915_gem_shrinker.c
       </sect2>
     </sect1>
+    <sect1>
+      <title>GuC-based Command Submission</title>
+      <sect2>
+        <title>GuC</title>
+!Pdrivers/gpu/drm/i915/intel_guc_loader.c GuC-specific firmware loader
+!Idrivers/gpu/drm/i915/intel_guc_loader.c
+      </sect2>
+      <sect2>
+        <title>GuC Client</title>
+!Pdrivers/gpu/drm/i915/i915_guc_submission.c GuC-based command submissison
+!Idrivers/gpu/drm/i915/i915_guc_submission.c
+      </sect2>
+    </sect1>
+
     <sect1>
       <title> Tracing </title>
       <para>
