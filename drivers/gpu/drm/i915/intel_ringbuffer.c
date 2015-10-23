@@ -924,17 +924,15 @@ static int gen9_init_workarounds(struct intel_engine_cs *ring)
 	WA_SET_BIT_MASKED(HALF_SLICE_CHICKEN3,
 			  GEN9_DISABLE_OCL_OOB_SUPPRESS_LOGIC);
 
-	if ((IS_SKYLAKE(dev) && (INTEL_REVID(dev) == SKL_REVID_A0 ||
-	    INTEL_REVID(dev) == SKL_REVID_B0)) ||
-	    (IS_BROXTON(dev) && INTEL_REVID(dev) < BXT_REVID_B0)) {
-		/* WaDisableDgMirrorFixInHalfSliceChicken5:skl,bxt */
+	/* WaDisableDgMirrorFixInHalfSliceChicken5:skl,bxt */
+	if (IS_SKL_REVID(dev, 0, SKL_REVID_B0) ||
+	    IS_BXT_REVID(dev, 0, BXT_REVID_A1))
 		WA_CLR_BIT_MASKED(GEN9_HALF_SLICE_CHICKEN5,
 				  GEN9_DG_MIRROR_FIX_ENABLE);
-	}
 
-	if ((IS_SKYLAKE(dev) && INTEL_REVID(dev) <= SKL_REVID_B0) ||
-	    (IS_BROXTON(dev) && INTEL_REVID(dev) < BXT_REVID_B0)) {
-		/* WaSetDisablePixMaskCammingAndRhwoInCommonSliceChicken:skl,bxt */
+	/* WaSetDisablePixMaskCammingAndRhwoInCommonSliceChicken:skl,bxt */
+	if (IS_SKL_REVID(dev, 0, SKL_REVID_B0) ||
+	    IS_BXT_REVID(dev, 0, BXT_REVID_A1)) {
 		WA_SET_BIT_MASKED(GEN7_COMMON_SLICE_CHICKEN1,
 				  GEN9_RHWO_OPTIMIZATION_DISABLE);
 		/*
@@ -944,12 +942,10 @@ static int gen9_init_workarounds(struct intel_engine_cs *ring)
 		 */
 	}
 
-	if ((IS_SKYLAKE(dev) && INTEL_REVID(dev) >= SKL_REVID_C0) ||
-	    IS_BROXTON(dev)) {
-		/* WaEnableYV12BugFixInHalfSliceChicken7:skl,bxt */
+	/* WaEnableYV12BugFixInHalfSliceChicken7:skl,bxt */
+	if (IS_SKL_REVID(dev, SKL_REVID_C0, REVID_FOREVER) || IS_BROXTON(dev))
 		WA_SET_BIT_MASKED(GEN9_HALF_SLICE_CHICKEN7,
 				  GEN9_ENABLE_YV12_BUGFIX);
-	}
 
 	/* Wa4x4STCOptimizationDisable:skl,bxt */
 	/* WaDisablePartialResolveInVc:skl,bxt */
@@ -961,24 +957,22 @@ static int gen9_init_workarounds(struct intel_engine_cs *ring)
 			  GEN9_CCS_TLB_PREFETCH_ENABLE);
 
 	/* WaDisableMaskBasedCammingInRCC:skl,bxt */
-	if ((IS_SKYLAKE(dev) && INTEL_REVID(dev) == SKL_REVID_C0) ||
-	    (IS_BROXTON(dev) && INTEL_REVID(dev) < BXT_REVID_B0))
+	if (IS_SKL_REVID(dev, SKL_REVID_C0, SKL_REVID_C0) ||
+	    IS_BXT_REVID(dev, 0, BXT_REVID_A1))
 		WA_SET_BIT_MASKED(SLICE_ECO_CHICKEN0,
 				  PIXEL_MASK_CAMMING_DISABLE);
 
 	/* WaForceContextSaveRestoreNonCoherent:skl,bxt */
 	tmp = HDC_FORCE_CONTEXT_SAVE_RESTORE_NON_COHERENT;
-	if ((IS_SKYLAKE(dev) && INTEL_REVID(dev) == SKL_REVID_F0) ||
-	    (IS_BROXTON(dev) && INTEL_REVID(dev) >= BXT_REVID_B0))
+	if (IS_SKL_REVID(dev, SKL_REVID_F0, SKL_REVID_F0) ||
+	    IS_BXT_REVID(dev, BXT_REVID_B0, REVID_FOREVER))
 		tmp |= HDC_FORCE_CSR_NON_COHERENT_OVR_DISABLE;
 	WA_SET_BIT_MASKED(HDC_CHICKEN0, tmp);
 
 	/* WaDisableSamplerPowerBypassForSOPingPong:skl,bxt */
-	if (IS_SKYLAKE(dev) ||
-	    (IS_BROXTON(dev) && INTEL_REVID(dev) <= BXT_REVID_B0)) {
+	if (IS_SKYLAKE(dev) || IS_BXT_REVID(dev, 0, BXT_REVID_B0))
 		WA_SET_BIT_MASKED(HALF_SLICE_CHICKEN3,
 				  GEN8_SAMPLER_POWER_BYPASS_DIS);
-	}
 
 	/* WaDisableSTUnitPowerOptimization:skl,bxt */
 	WA_SET_BIT_MASKED(HALF_SLICE_CHICKEN2, GEN8_ST_PO_DISABLE);
@@ -1038,7 +1032,7 @@ static int skl_init_workarounds(struct intel_engine_cs *ring)
 	if (ret)
 		return ret;
 
-	if (INTEL_REVID(dev) <= SKL_REVID_D0) {
+	if (IS_SKL_REVID(dev, 0, SKL_REVID_D0)) {
 		/* WaDisableHDCInvalidation:skl */
 		I915_WRITE(GAM_ECOCHK, I915_READ(GAM_ECOCHK) |
 			   BDW_DISABLE_HDC_INVALIDATION);
@@ -1051,23 +1045,23 @@ static int skl_init_workarounds(struct intel_engine_cs *ring)
 	/* GEN8_L3SQCREG4 has a dependency with WA batch so any new changes
 	 * involving this register should also be added to WA batch as required.
 	 */
-	if (INTEL_REVID(dev) <= SKL_REVID_E0)
+	if (IS_SKL_REVID(dev, 0, SKL_REVID_E0))
 		/* WaDisableLSQCROPERFforOCL:skl */
 		I915_WRITE(GEN8_L3SQCREG4, I915_READ(GEN8_L3SQCREG4) |
 			   GEN8_LQSC_RO_PERF_DIS);
 
 	/* WaEnableGapsTsvCreditFix:skl */
-	if (IS_SKYLAKE(dev) && (INTEL_REVID(dev) >= SKL_REVID_C0)) {
+	if (IS_SKL_REVID(dev, SKL_REVID_C0, REVID_FOREVER)) {
 		I915_WRITE(GEN8_GARBCNTL, (I915_READ(GEN8_GARBCNTL) |
 					   GEN9_GAPS_TSV_CREDIT_DISABLE));
 	}
 
 	/* WaDisablePowerCompilerClockGating:skl */
-	if (INTEL_REVID(dev) == SKL_REVID_B0)
+	if (IS_SKL_REVID(dev, SKL_REVID_B0, SKL_REVID_B0))
 		WA_SET_BIT_MASKED(HIZ_CHICKEN,
 				  BDW_HIZ_POWER_COMPILER_CLOCK_GATING_DISABLE);
 
-	if (INTEL_REVID(dev) <= SKL_REVID_D0) {
+	if (IS_SKL_REVID(dev, 0, SKL_REVID_D0)) {
 		/*
 		 *Use Force Non-Coherent whenever executing a 3D context. This
 		 * is a workaround for a possible hang in the unlikely event
@@ -1078,19 +1072,17 @@ static int skl_init_workarounds(struct intel_engine_cs *ring)
 				  HDC_FORCE_NON_COHERENT);
 	}
 
-	if (INTEL_REVID(dev) == SKL_REVID_C0 ||
-	    INTEL_REVID(dev) == SKL_REVID_D0)
-		/* WaBarrierPerformanceFixDisable:skl */
+	/* WaBarrierPerformanceFixDisable:skl */
+	if (IS_SKL_REVID(dev, SKL_REVID_C0, SKL_REVID_D0))
 		WA_SET_BIT_MASKED(HDC_CHICKEN0,
 				  HDC_FENCE_DEST_SLM_DISABLE |
 				  HDC_BARRIER_PERFORMANCE_DISABLE);
 
 	/* WaDisableSbeCacheDispatchPortSharing:skl */
-	if (INTEL_REVID(dev) <= SKL_REVID_F0) {
+	if (IS_SKL_REVID(dev, 0, SKL_REVID_F0))
 		WA_SET_BIT_MASKED(
 			GEN7_HALF_SLICE_CHICKEN1,
 			GEN7_SBE_SS_CACHE_DISPATCH_PORT_SHARING_DISABLE);
-	}
 
 	return skl_tune_iz_hashing(ring);
 }
@@ -1107,11 +1099,11 @@ static int bxt_init_workarounds(struct intel_engine_cs *ring)
 
 	/* WaStoreMultiplePTEenable:bxt */
 	/* This is a requirement according to Hardware specification */
-	if (INTEL_REVID(dev) == BXT_REVID_A0)
+	if (IS_BXT_REVID(dev, 0, BXT_REVID_A0))
 		I915_WRITE(TILECTL, I915_READ(TILECTL) | TILECTL_TLBPF);
 
 	/* WaSetClckGatingDisableMedia:bxt */
-	if (INTEL_REVID(dev) == BXT_REVID_A0) {
+	if (IS_BXT_REVID(dev, 0, BXT_REVID_A0)) {
 		I915_WRITE(GEN7_MISCCPCTL, (I915_READ(GEN7_MISCCPCTL) &
 					    ~GEN8_DOP_CLOCK_GATE_MEDIA_ENABLE));
 	}
@@ -1121,7 +1113,7 @@ static int bxt_init_workarounds(struct intel_engine_cs *ring)
 			  STALL_DOP_GATING_DISABLE);
 
 	/* WaDisableSbeCacheDispatchPortSharing:bxt */
-	if (INTEL_REVID(dev) <= BXT_REVID_B0) {
+	if (IS_BXT_REVID(dev, 0, BXT_REVID_B0)) {
 		WA_SET_BIT_MASKED(
 			GEN7_HALF_SLICE_CHICKEN1,
 			GEN7_SBE_SS_CACHE_DISPATCH_PORT_SHARING_DISABLE);
@@ -2004,9 +1996,33 @@ static int init_phys_status_page(struct intel_engine_cs *ring)
 
 void intel_unpin_ringbuffer_obj(struct intel_ringbuffer *ringbuf)
 {
-	iounmap(ringbuf->virtual_start);
+	if (HAS_LLC(ringbuf->obj->base.dev) && !ringbuf->obj->stolen)
+		vunmap(ringbuf->virtual_start);
+	else
+		iounmap(ringbuf->virtual_start);
 	ringbuf->virtual_start = NULL;
 	i915_gem_object_ggtt_unpin(ringbuf->obj);
+}
+
+static u32 *vmap_obj(struct drm_i915_gem_object *obj)
+{
+	struct sg_page_iter sg_iter;
+	struct page **pages;
+	void *addr;
+	int i;
+
+	pages = drm_malloc_ab(obj->base.size >> PAGE_SHIFT, sizeof(*pages));
+	if (pages == NULL)
+		return NULL;
+
+	i = 0;
+	for_each_sg_page(obj->pages->sgl, &sg_iter, obj->pages->nents, 0)
+		pages[i++] = sg_page_iter_page(&sg_iter);
+
+	addr = vmap(pages, i, 0, PAGE_KERNEL);
+	drm_free_large(pages);
+
+	return addr;
 }
 
 int intel_pin_and_map_ringbuffer_obj(struct drm_device *dev,
@@ -2016,21 +2032,39 @@ int intel_pin_and_map_ringbuffer_obj(struct drm_device *dev,
 	struct drm_i915_gem_object *obj = ringbuf->obj;
 	int ret;
 
-	ret = i915_gem_obj_ggtt_pin(obj, PAGE_SIZE, PIN_MAPPABLE);
-	if (ret)
-		return ret;
+	if (HAS_LLC(dev_priv) && !obj->stolen) {
+		ret = i915_gem_obj_ggtt_pin(obj, PAGE_SIZE, 0);
+		if (ret)
+			return ret;
 
-	ret = i915_gem_object_set_to_gtt_domain(obj, true);
-	if (ret) {
-		i915_gem_object_ggtt_unpin(obj);
-		return ret;
-	}
+		ret = i915_gem_object_set_to_cpu_domain(obj, true);
+		if (ret) {
+			i915_gem_object_ggtt_unpin(obj);
+			return ret;
+		}
 
-	ringbuf->virtual_start = ioremap_wc(dev_priv->gtt.mappable_base +
-			i915_gem_obj_ggtt_offset(obj), ringbuf->size);
-	if (ringbuf->virtual_start == NULL) {
-		i915_gem_object_ggtt_unpin(obj);
-		return -EINVAL;
+		ringbuf->virtual_start = vmap_obj(obj);
+		if (ringbuf->virtual_start == NULL) {
+			i915_gem_object_ggtt_unpin(obj);
+			return -ENOMEM;
+		}
+	} else {
+		ret = i915_gem_obj_ggtt_pin(obj, PAGE_SIZE, PIN_MAPPABLE);
+		if (ret)
+			return ret;
+
+		ret = i915_gem_object_set_to_gtt_domain(obj, true);
+		if (ret) {
+			i915_gem_object_ggtt_unpin(obj);
+			return ret;
+		}
+
+		ringbuf->virtual_start = ioremap_wc(dev_priv->gtt.mappable_base +
+						    i915_gem_obj_ggtt_offset(obj), ringbuf->size);
+		if (ringbuf->virtual_start == NULL) {
+			i915_gem_object_ggtt_unpin(obj);
+			return -EINVAL;
+		}
 	}
 
 	return 0;

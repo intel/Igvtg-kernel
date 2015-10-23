@@ -551,7 +551,7 @@ static void assert_can_disable_dc6(struct drm_i915_private *dev_priv)
 		  "DC6 already programmed to be disabled.\n");
 }
 
-static void skl_enable_dc6(struct drm_i915_private *dev_priv)
+void skl_enable_dc6(struct drm_i915_private *dev_priv)
 {
 	uint32_t val;
 
@@ -568,7 +568,7 @@ static void skl_enable_dc6(struct drm_i915_private *dev_priv)
 	POSTING_READ(DC_STATE_EN);
 }
 
-static void skl_disable_dc6(struct drm_i915_private *dev_priv)
+void skl_disable_dc6(struct drm_i915_private *dev_priv)
 {
 	uint32_t val;
 
@@ -629,10 +629,10 @@ static void skl_set_power_well(struct drm_i915_private *dev_priv,
 				!I915_READ(HSW_PWR_WELL_BIOS),
 				"Invalid for power well status to be enabled, unless done by the BIOS, \
 				when request is to disable!\n");
-			if ((GEN9_ENABLE_DC5(dev) || SKL_ENABLE_DC6(dev)) &&
-				power_well->data == SKL_DISP_PW_2) {
+			if (power_well->data == SKL_DISP_PW_2) {
+				if (GEN9_ENABLE_DC5(dev))
+					gen9_disable_dc5(dev_priv);
 				if (SKL_ENABLE_DC6(dev)) {
-					skl_disable_dc6(dev_priv);
 					/*
 					 * DDI buffer programming unnecessary during driver-load/resume
 					 * as it's already done during modeset initialization then.
@@ -640,8 +640,6 @@ static void skl_set_power_well(struct drm_i915_private *dev_priv,
 					 */
 					if (!dev_priv->power_domains.initializing)
 						intel_prepare_ddi(dev);
-				} else {
-					gen9_disable_dc5(dev_priv);
 				}
 			}
 			I915_WRITE(HSW_PWR_WELL_DRIVER, tmp | req_mask);
@@ -667,7 +665,7 @@ static void skl_set_power_well(struct drm_i915_private *dev_priv,
 				DRM_DEBUG_KMS("Disabling %s\n", power_well->name);
 			}
 
-			if ((GEN9_ENABLE_DC5(dev) || SKL_ENABLE_DC6(dev)) &&
+			if (GEN9_ENABLE_DC5(dev) &&
 				power_well->data == SKL_DISP_PW_2) {
 				enum csr_state state;
 				/* TODO: wait for a completion event or
@@ -680,10 +678,7 @@ static void skl_set_power_well(struct drm_i915_private *dev_priv,
 					DRM_DEBUG("CSR firmware not ready (%d)\n",
 							state);
 				else
-					if (SKL_ENABLE_DC6(dev))
-						skl_enable_dc6(dev_priv);
-					else
-						gen9_enable_dc5(dev_priv);
+					gen9_enable_dc5(dev_priv);
 			}
 		}
 	}

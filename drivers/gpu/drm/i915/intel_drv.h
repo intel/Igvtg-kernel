@@ -250,6 +250,7 @@ struct intel_atomic_state {
 	unsigned int cdclk;
 	bool dpll_set;
 	struct intel_shared_dpll_config shared_dpll[I915_NUM_PLLS];
+	struct intel_wm_config wm_config;
 };
 
 struct intel_plane_state {
@@ -333,6 +334,21 @@ struct intel_crtc_scaler_state {
 
 /* drm_mode->private_flags */
 #define I915_MODE_FLAG_INHERITED 1
+
+struct intel_pipe_wm {
+	struct intel_wm_level wm[5];
+	uint32_t linetime;
+	bool fbc_wm_enabled;
+	bool pipe_enabled;
+	bool sprites_enabled;
+	bool sprites_scaled;
+};
+
+struct skl_pipe_wm {
+	struct skl_wm_level wm[8];
+	struct skl_wm_level trans_wm;
+	uint32_t linetime;
+};
 
 struct intel_crtc_state {
 	struct drm_crtc_state base;
@@ -468,6 +484,20 @@ struct intel_crtc_state {
 
 	/* w/a for waiting 2 vblanks during crtc enable */
 	enum pipe hsw_workaround_pipe;
+
+	/* IVB sprite scaling w/a (WaCxSRDisabledForSpriteScaling:ivb) */
+	bool disable_lp_wm;
+
+	struct {
+		/*
+		 * optimal watermarks, programmed post-vblank when this state
+		 * is committed
+		 */
+		union {
+			struct intel_pipe_wm ilk;
+			struct skl_pipe_wm skl;
+		} optimal;
+	} wm;
 };
 
 struct vlv_wm_state {
@@ -479,26 +509,12 @@ struct vlv_wm_state {
 	bool cxsr;
 };
 
-struct intel_pipe_wm {
-	struct intel_wm_level wm[5];
-	uint32_t linetime;
-	bool fbc_wm_enabled;
-	bool pipe_enabled;
-	bool sprites_enabled;
-	bool sprites_scaled;
-};
-
 struct intel_mmio_flip {
 	struct work_struct work;
 	struct drm_i915_private *i915;
 	struct drm_i915_gem_request *req;
 	struct intel_crtc *crtc;
-};
-
-struct skl_pipe_wm {
-	struct skl_wm_level wm[8];
-	struct skl_wm_level trans_wm;
-	uint32_t linetime;
+	unsigned int rotation;
 };
 
 /*
@@ -515,7 +531,6 @@ struct intel_crtc_atomic_commit {
 	bool disable_cxsr;
 	bool pre_disable_primary;
 	bool update_wm_pre, update_wm_post;
-	unsigned disabled_planes;
 
 	/* Sleepable operations to perform after commit */
 	unsigned fb_bits;
@@ -568,9 +583,10 @@ struct intel_crtc {
 	/* per-pipe watermark state */
 	struct {
 		/* watermarks currently being used  */
-		struct intel_pipe_wm active;
-		/* SKL wm values currently in use */
-		struct skl_pipe_wm skl_active;
+		union {
+			struct intel_pipe_wm ilk;
+			struct skl_pipe_wm skl;
+		} active;
 		/* allow CxSR on this pipe */
 		bool cxsr_allowed;
 	} wm;
@@ -1152,7 +1168,10 @@ void broxton_ddi_phy_uninit(struct drm_device *dev);
 void bxt_enable_dc9(struct drm_i915_private *dev_priv);
 void bxt_disable_dc9(struct drm_i915_private *dev_priv);
 void skl_init_cdclk(struct drm_i915_private *dev_priv);
+int skl_sanitize_cdclk(struct drm_i915_private *dev_priv);
 void skl_uninit_cdclk(struct drm_i915_private *dev_priv);
+void skl_enable_dc6(struct drm_i915_private *dev_priv);
+void skl_disable_dc6(struct drm_i915_private *dev_priv);
 void intel_dp_get_m_n(struct intel_crtc *crtc,
 		      struct intel_crtc_state *pipe_config);
 void intel_dp_set_m_n(struct intel_crtc *crtc, enum link_m_n_set m_n);
@@ -1396,12 +1415,6 @@ void intel_init_clock_gating(struct drm_device *dev);
 void intel_suspend_hw(struct drm_device *dev);
 int ilk_wm_max_level(const struct drm_device *dev);
 void intel_update_watermarks(struct drm_crtc *crtc);
-void intel_update_sprite_watermarks(struct drm_plane *plane,
-				    struct drm_crtc *crtc,
-				    uint32_t sprite_width,
-				    uint32_t sprite_height,
-				    int pixel_size,
-				    bool enabled, bool scaled);
 void intel_init_pm(struct drm_device *dev);
 void intel_pm_setup(struct drm_device *dev);
 void intel_gpu_ips_init(struct drm_i915_private *dev_priv);

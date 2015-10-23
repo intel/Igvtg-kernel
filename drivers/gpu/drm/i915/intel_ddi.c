@@ -2949,8 +2949,8 @@ void intel_ddi_pll_init(struct drm_device *dev)
 
 		cdclk_freq = dev_priv->display.get_display_clock_speed(dev);
 		dev_priv->skl_boot_cdclk = cdclk_freq;
-		if (!(I915_READ(LCPLL1_CTL) & LCPLL_PLL_ENABLE))
-			DRM_ERROR("LCPLL1 is disabled\n");
+		if (skl_sanitize_cdclk(dev_priv))
+			DRM_DEBUG_KMS("Sanitized cdclk programmed by pre-os\n");
 		else
 			intel_display_power_get(dev_priv, POWER_DOMAIN_PLLS);
 	} else if (IS_BROXTON(dev)) {
@@ -3247,8 +3247,7 @@ void intel_ddi_init(struct drm_device *dev, enum port port)
 		 * On BXT A0/A1, sw needs to activate DDIA HPD logic and
 		 * interrupts to check the external panel connection.
 		 */
-		if (IS_BROXTON(dev_priv) && (INTEL_REVID(dev) < BXT_REVID_B0)
-					 && port == PORT_B)
+		if (IS_BXT_REVID(dev, 0, BXT_REVID_A1) && port == PORT_B)
 			dev_priv->hotplug.irq_port[PORT_A] = intel_dig_port;
 		else
 			dev_priv->hotplug.irq_port[port] = intel_dig_port;

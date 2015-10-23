@@ -2753,18 +2753,23 @@ static void i915_gem_reset_ring_cleanup(struct drm_i915_private *dev_priv,
 	 * are the ones that keep the context and ringbuffer backing objects
 	 * pinned in place.
 	 */
-	while (!list_empty(&ring->execlist_queue)) {
-		struct drm_i915_gem_request *submit_req;
 
-		submit_req = list_first_entry(&ring->execlist_queue,
-				struct drm_i915_gem_request,
-				execlist_link);
-		list_del(&submit_req->execlist_link);
+	if (i915.enable_execlists) {
+		spin_lock_irq(&ring->execlist_lock);
+		while (!list_empty(&ring->execlist_queue)) {
+			struct drm_i915_gem_request *submit_req;
 
-		if (submit_req->ctx != ring->default_context)
-			intel_lr_context_unpin(submit_req);
+			submit_req = list_first_entry(&ring->execlist_queue,
+					struct drm_i915_gem_request,
+					execlist_link);
+			list_del(&submit_req->execlist_link);
 
-		i915_gem_request_unreference(submit_req);
+			if (submit_req->ctx != ring->default_context)
+				intel_lr_context_unpin(submit_req);
+
+			i915_gem_request_unreference(submit_req);
+		}
+		spin_unlock_irq(&ring->execlist_lock);
 	}
 
 	/*
@@ -3826,7 +3831,7 @@ int i915_gem_set_caching_ioctl(struct drm_device *dev, void *data,
 		 * cacheline, whereas normally such cachelines would get
 		 * invalidated.
 		 */
-		if (IS_BROXTON(dev) && INTEL_REVID(dev) < BXT_REVID_B0)
+		if (IS_BXT_REVID(dev, 0, BXT_REVID_A1))
 			return -ENODEV;
 
 		level = I915_CACHE_LLC;
