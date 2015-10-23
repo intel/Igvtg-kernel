@@ -1,0 +1,24 @@
+origin/drm-intel-fixes 1d337b286098c8e9057854ee59dff05f8ffa81e6
+	drm/i915/skl: Prevent unclaimed register writes on skylake.
+drm-upstream/drm-fixes c50f13f911b90a722308bffbf26187ff3890aa1e
+	Merge branch 'drm-fixes-4.3' of git://people.freedesktop.org/~agd5f/linux into drm-fixes
+origin/drm-intel-next-fixes f9e3dc786a585e1ec371c446c62dcc77d0548629
+	drm/i915: add hotplug activation period to hotplug update mask
+origin/drm-intel-next-queued 97e5ed1111dcc5300a0f59a55248cd243937a8ab
+	drm/i915: shut up gen8+ SDE irq dmesg noise
+drm-upstream/drm-next d7e1bc3f5e70c5a106606e33cfa4d413459611ba
+	Merge branch 'msm-next' of git://people.freedesktop.org/~robclark/linux into drm-next
+sound-upstream/for-next 274035751e25ee15a064e43cde7b4e7a9b75d921
+	Merge branch 'topic/hw-constraint-single' into for-next
+origin/topic/drm-misc b110ae706c75458561c03526014f88821cda7f9b
+	drm/gem: Update/Polish docs
+origin/topic/drm-fixes f36203be608a38a5b5523a7aa52cc72f757b9679
+	drm/dp: Add dp_aux_i2c_speed_khz module param to set the assume i2c bus speed
+origin/topic/kerneldoc 85b45d356f0a954342a56ca0228748b532b52114
+	scripts/kernel-doc: Processing -nofunc for functions only
+origin/topic/crc-pmic 04cbfe68c3190f23bcfec230bfd832b533f35554
+	mfd: Add GPIOLIB dependency if INTEL_SOC_PMIC is to be enabled
+origin/topic/connector-locking 3fdefa399e4644399ce3e74e65a75122d52dba6a
+	drm: gc now dead mode_group code
+origin/topic/mst-fixes 6ea76f3cade4734e73e3da842005820558b8b828
+	drm/atomic-helpers: Make encoder picking more robust
