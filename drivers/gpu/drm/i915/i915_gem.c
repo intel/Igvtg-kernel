@@ -5080,6 +5080,9 @@ i915_gem_load(struct drm_device *dev)
 	else
 		dev_priv->num_fence_regs = 8;
 
+	if(intel_gvt_host_active(dev))
+		dev_priv->num_fence_regs = gvt.dom0_fence_sz;
+
 	if (intel_vgpu_active(dev))
 		dev_priv->num_fence_regs =
 				I915_READ(vgtif_reg(avail_rs.fence_num));

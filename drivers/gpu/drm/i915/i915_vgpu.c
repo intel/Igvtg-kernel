@@ -188,10 +188,18 @@ int intel_vgt_balloon(struct drm_device *dev)
 	unsigned long unmappable_base, unmappable_size, unmappable_end;
 	int ret;
 
-	mappable_base = I915_READ(vgtif_reg(avail_rs.mappable_gmadr.base));
-	mappable_size = I915_READ(vgtif_reg(avail_rs.mappable_gmadr.size));
-	unmappable_base = I915_READ(vgtif_reg(avail_rs.nonmappable_gmadr.base));
-	unmappable_size = I915_READ(vgtif_reg(avail_rs.nonmappable_gmadr.size));
+	if(intel_gvt_host_active(dev)) {
+		mappable_base = 0;
+		mappable_size = gvt.dom0_low_gm_sz << 20;
+		unmappable_base = dev_priv->gtt.mappable_end;
+		unmappable_size = gvt.dom0_high_gm_sz << 20;
+	} else if (intel_vgpu_active(dev)) {
+		mappable_base = I915_READ(vgtif_reg(avail_rs.mappable_gmadr.base));
+		mappable_size = I915_READ(vgtif_reg(avail_rs.mappable_gmadr.size));
+		unmappable_base = I915_READ(vgtif_reg(avail_rs.nonmappable_gmadr.base));
+		unmappable_size = I915_READ(vgtif_reg(avail_rs.nonmappable_gmadr.size));
+	} else
+		return -ENODEV;
 
 	mappable_end = mappable_base + mappable_size;
 	unmappable_end = unmappable_base + unmappable_size;

@@ -27,6 +27,9 @@
 struct gvt_kernel_params {
 	bool enable;
 	int debug;
+	int dom0_low_gm_sz;
+	int dom0_high_gm_sz;
+	int dom0_fence_sz;
 };
 
 extern struct gvt_kernel_params gvt;

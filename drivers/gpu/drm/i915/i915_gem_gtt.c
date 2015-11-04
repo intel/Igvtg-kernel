@@ -2713,7 +2713,7 @@ static int i915_gem_setup_global_gtt(struct drm_device *dev,
 	i915_address_space_init(ggtt_vm, dev_priv);
 	ggtt_vm->total += PAGE_SIZE;
 
-	if (intel_vgpu_active(dev)) {
+	if (intel_vgpu_active(dev) || intel_gvt_host_active(dev)) {
 		ret = intel_vgt_balloon(dev);
 		if (ret)
 			return ret;
@@ -2810,7 +2810,7 @@ void i915_global_gtt_cleanup(struct drm_device *dev)
 	}
 
 	if (drm_mm_initialized(&vm->mm)) {
-		if (intel_vgpu_active(dev))
+		if (intel_vgpu_active(dev) || intel_gvt_host_active(dev))
 			intel_vgt_deballoon();
 
 		drm_mm_takedown(&vm->mm);
