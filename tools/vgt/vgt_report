@@ -1,0 +1,399 @@
+#!/usr/bin/python
+
+#Copyright (c) 2011, Intel Corporation.
+#
+#This program is free software; you can redistribute it and/or modify it
+#under the terms and conditions of the GNU General Public License,
+#version 2, as published by the Free Software Foundation.
+#
+#This program is distributed in the hope it will be useful, but WITHOUT
+#ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+#FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+#more details.
+#
+#You should have received a copy of the GNU General Public License along with
+#this program; if not, write to the Free Software Foundation, Inc.,
+#51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
+
+import os, sys, re
+from optparse import OptionParser
+from subprocess import *
+
+parser = OptionParser()
+parser.add_option("-i", "--info", dest="reginfo", action="store_true",
+		   help="show info/stat for accessed registers", default=True)
+parser.add_option("-r", "--regname", dest="regname", action="store_true",
+		   help="show the list of register names")
+parser.add_option("-f", "--file", dest="filename", metavar="FILE",
+		   default="drivers/gpu/drm/i915/vgt/reg.h",
+		   help="the location of vgt/reg.h (default drivers/gpu/drm/i915/vgt/reg.h)")
+parser.add_option("-u", "--untracked", dest="untrack", action="store_true",
+		   help="show the list of untracked registers")
+parser.add_option("-U", "--unused", dest="unuse", action="store_true",
+		   help="show the list of tracked but unused registers")
+parser.add_option("-d", "--vdiff", dest="vdiff", action="store_true",
+		   help="show the list of registers with different vreg values among VMs")
+parser.add_option("-s", "--sdiff", dest="sdiff", action="store_true",
+		   help="show the list of registers with different sreg values among VMs")
+parser.add_option("-p", "--preg", dest="preg", action="store_true",
+		   help="dump the physical HW registers with --vdiff and --sdiff")
+parser.add_option("-g", "--gpuaccess", dest="gpuaccess", action="store_true",
+		   help="show the list of gpu-accessed registers")
+parser.add_option("-c", "--ctxswitch", dest="ctxswitch", action="store_true",
+		   help="show the list of registers saved/restored at ctx switch time")
+parser.add_option("-v", "--verbose", dest="verbose",
+		   help="pring status message", action="store_true")
+
+(options, args) = parser.parse_args()
+if options.verbose:
+	print (options, args)
+
+if options.verbose:
+	print "Use %s as the reg file" % options.filename
+fi = open(options.filename, "r")
+s = fi.read()
+fi.close()
+
+path_reginfo = "/sys/kernel/debug/vgt/reginfo"
+path_preg = "/sys/kernel/debug/vgt/preg"
+path_debugfs = "/sys/kernel/debug/vgt/"
+path_vreg = "/virtual_mmio_space"
+path_sreg = "/shadow_mmio_space"
+
+# Collect reg name
+reginfo = {}
+for line in s.split("\n"):
+	m = re.search("^#define[ \t]+_REG_[A-Z_]+", line)
+	if not m:
+		continue
+	m = re.search("^#define[ \t]+_REG_(?P<name>[0-9A-Z_]+)[ \t]+(?P<offset>0x[0-9a-zA-Z]+)", line)
+
+	if not m or m.group("name") == "INVALID":
+		continue
+	offset = int(m.group("offset"), 16)
+	if not offset in reginfo:
+		reginfo[offset] = {}
+		reginfo[offset]["name"] = m.group("name")
+	elif reginfo[offset]["name"].find(m.group("name")) == -1:
+		reginfo[offset]["name"] += " | " + m.group("name")
+		if options.verbose:
+			print "find multiple names for regs", hex(offset), reginfo[offset]["name"]
+	#print hex(offset), reginfo[offset]["name"]
+
+# get info for each access reg
+fi = open(path_reginfo, "r")
+info = fi.read()
+fi.close()
+i = 0
+for line in info.split("\n"):
+	if len(line.split(":")) == 1 or line.find("Reg:") != -1:
+		continue
+	m = re.search("^[ \t]*(?P<reg>[0-9a-zA-Z]+):[ \t]*(?P<flags>[0-9a-zA-Z]+) ", line)
+	if not m:
+		continue
+	reg = int(m.group("reg"), 16)
+	if not reg in reginfo:
+		reginfo[reg] = {}
+		reginfo[reg]["name"] = ""
+	flags = int(m.group("flags"), 16)
+
+	if reg >= 0x140000 and reg < 0x180000:
+		continue
+
+	if reg >= 0x78000 and reg < 0x79000:
+		continue
+
+	reginfo[reg]["Valid"] = True
+	reginfo[reg]["Owner"] = "N/A"
+	i += 1
+	if (flags & 0xf == 0):
+		reginfo[reg]["Owner"] = "None"
+	elif (flags & 0xf == 4):
+		reginfo[reg]["Owner"] = "RDR"
+	elif (flags & 0xf == 5):
+		reginfo[reg]["Owner"] = "DPY"
+	elif (flags & 0xf == 6):
+		reginfo[reg]["Owner"] = "PM"
+	elif (flags & 0xf == 7):
+		reginfo[reg]["Owner"] = "MGMT"
+
+	reginfo[reg]["Type"] = "N/A"
+	if (flags & 0xf != 0):
+		reginfo[reg]["Type"] = "MPT"
+	elif (flags & (1 << 4)):
+		reginfo[reg]["Type"] = "PT"
+	elif (flags & (1 << 7)):
+		reginfo[reg]["Type"] = "Virt"
+
+	if (flags & (1 << 5)):
+		reginfo[reg]["AddressFix"] = True;
+	if (flags & (1 << 6)):
+		reginfo[reg]["HwStatus"] = True;
+	if (flags & (1 << 8)):
+		reginfo[reg]["ModeMask"] = True;
+	if (flags & (1 << 10) == 0):
+		reginfo[reg]["Untracked"] = True;
+	if (flags & (1 << 11)):
+		reginfo[reg]["Accessed"] = True;
+	if (flags & (1 << 12)):
+		reginfo[reg]["Saved"] = True;
+	if (flags & (1 << 14)):
+		reginfo[reg]["CmdAccess"] = True;
+	reginfo[reg]["Flags"] = flags;
+print "Total %d registers reported" % i
+
+def get_reg_attr(reg):
+	out = ""
+	if "AddressFix" in reg:
+		out += " AF"
+	if "HwStatus" in reg:
+		out += " HW"
+	if "ModeMask" in reg:
+		out += " MD"
+	return out
+
+def get_reg_state(reg):
+	out = ""
+	if "Untracked" in reg:
+		out += " u"
+	elif not "Accessed" in reg:
+		out += " U"
+	if "CmdAccess" in reg:
+		out += " G"
+	return out
+
+def show_reginfo():
+	if options.preg:
+		print "Get preg info..."
+		p_output = Popen(["cat", path_preg], stdout=PIPE)
+		print "Analyze preg info..."
+		preginfo = get_reginfo(p_output)
+
+	print "===================================="
+	print "Owner Type:"
+	print "\tNone, RDR(Render), DPY(Display), PM, MGMT(Management)"
+	print "Type:"
+	print "\tVIRT - default virtualized"
+	print "\tMPT - Mediated Pass-Through based on owner type"
+	print "\tPT - Pass-through to any VM, for read-only access"
+	print "\tBOOT - pass-through to dom0 at boot time. Otherwise virtualized"
+	print "Attributes:"
+	print "\tAF - Address check required"
+	print "\tHW - Contain HW updated status bit"
+	print "\tMD - High 16bits as mask for change"
+	print "State:"
+	print "\tu - Untracked"
+	print "\tD - Different value among VMs"
+	print "\tG - Accessed by GPU CMDs"
+	print "\tU - Tracked but unused"
+
+	line = "\n%10s: %5s|%5s|%12s|%8s" % ("Reg", "Owner", "Type", "Attributes", "State")
+
+	if options.preg:
+		line += "|%10s" % "Preg"
+
+	line += "|%-8s" % "Name"
+
+	print line
+
+	print "------------------------------------"
+
+	i = 0
+	for reg in sorted(reginfo):
+		if not "Accessed" in reginfo[reg]:
+			continue
+
+		line = "%10s: %5s|%5s|%12s|%8s" % (hex(reg), reginfo[reg]["Owner"], reginfo[reg]["Type"], get_reg_attr(reginfo[reg]), get_reg_state(reginfo[reg]))
+
+		if options.preg:
+			line += "|%10s" % preginfo[reg]
+
+		line += "|%s" % reginfo[reg]["name"]
+
+		print line
+
+		i += 1
+	print "Total %d registers" % i
+	print "===================================="
+
+def show_regname():
+	print "=============Reg Name==============="
+	print "\"A\": the reg is accessed"
+	print "------------------------------------"
+	i = 0
+	for reg in sorted(reginfo):
+		if "Accessed" in reginfo[reg]:
+			ac = "A"
+		else:
+			ac = " "
+		print "%10s(%s): %s" % (hex(reg), ac, reginfo[reg]["name"])
+		i += 1
+	print "Total %d registers" % i
+	print "===================================="
+
+def show_untracked():
+	print "===========Untracked Regs==========="
+	i = 0
+	for reg in sorted(reginfo):
+		if not "Valid" in reginfo[reg]:
+			continue;
+
+		if "Untracked" in reginfo[reg]:
+			if "CmdAccess" in reginfo[reg]:
+				print "[G]%10s: %s" %(hex(reg), reginfo[reg]["name"])
+			else:
+				print "%10s: %s" %(hex(reg), reginfo[reg]["name"])
+			i += 1
+	print "Total %d registers" % i
+	print "===================================="
+
+def show_unused():
+	print "===========Unused Regs==========="
+	i = 0
+	for reg in sorted(reginfo):
+		if not "Valid" in reginfo[reg]:
+			continue;
+
+		if not "Accessed" in reginfo[reg] and not "Untracked" in reginfo[reg]:
+			print "%10s: %s" %(hex(reg), reginfo[reg]["name"])
+			i += 1
+	print "Total %d registers" % i
+	print "===================================="
+
+def show_gpu_access():
+	print "===========GPU-accessed Regs==========="
+	i = 0
+	for reg in sorted(reginfo):
+		if not "Valid" in reginfo[reg]:
+			continue;
+
+		if "CmdAccess" in reginfo[reg]:
+			print "%10s: %20s" %(hex(reg), reginfo[reg]["name"])
+			i += 1
+	print "Total %d registers" % i
+	print "===================================="
+
+def get_reginfo(output):
+	info = {}
+	for line in output.stdout.read().split("\n"):
+		if not line:
+			continue
+
+		if line.find(":") < 0:
+			continue
+
+		reg_base = line.split(":")[0]
+		vars = line.split(":")[1].strip().split(" ")
+		if len(vars) != 16:
+			print "messed values:", vars, line
+			continue
+
+		for i in range(16):
+			reg = int(reg_base, 16) + i*4
+			info[reg] = vars[i]
+	return info
+
+def show_diff(path_reg):
+	print "=============Diff List=============="
+	print "Collecting VM vReg information..."
+	dirinfo = Popen(["ls", path_debugfs], stdout=PIPE)
+	#print dirinfo.stdout.read().split("\n")
+	vminfo = {}
+	num = 0
+	outputs = {}
+	preginfo = {}
+	for node in dirinfo.stdout.read().split("\n"):
+		m = re.search("^(?P<vmid>vm[0-9]+)$", node)
+		if not m:
+			continue
+		vmid = m.group("vmid")
+		if not vmid in vminfo:
+			print "Found %s..." % vmid
+			vminfo[vmid] = {}
+		else:
+			print "Found dupliacted vm instance: " + vmid
+		outputs[vmid] = Popen(["cat", path_debugfs + vmid + path_reg], stdout=PIPE)
+
+	if options.preg:
+		print "Get preg info..."
+		p_output = Popen(["cat", path_preg], stdout=PIPE)
+
+	num = len(vminfo)
+	for vmid in outputs.keys():
+		print "Analyze %s..." % vmid
+		vminfo[vmid] = get_reginfo(outputs[vmid])
+	if options.preg:
+		print "Analyze preg info..."
+		preginfo = get_reginfo(p_output)
+
+	print "Calculating difference among %d vm instances." % num
+	print "------------------------------------"
+	title = "%10s: |" % "Reg"
+	title += "%5s|" % "Type"
+	title += "%5s|" % "Saved"
+	for i in range(num):
+		title += "   VM%-4s |" % i
+	if options.preg:
+		title += "   Preg   |"
+	title += " %-8s" % "Name"
+	print title
+
+	vm0 = vminfo.keys()[0]
+	cnt = 0
+	for reg in sorted(vminfo[vm0]):
+		if not reg in reginfo or not "Accessed" in reginfo[reg]:
+			continue;
+
+		val = vminfo[vm0][reg]
+		found = False
+		for vm in vminfo.keys():
+			if val != vminfo[vm][reg]:
+				found = True
+		if found:
+			cnt += 1
+			line = "%10x: |" % reg
+			line += "%5s|" % reginfo[reg]["Type"]
+			if "Saved" in reginfo[reg]:
+				line += "%5s|" % "Y"
+			else:
+				line += "%5s|" % " "
+			for i in sorted(vminfo.keys()):
+				line += " %8s |" % vminfo[i][reg]
+			if options.preg:
+				line += " %8s |" % preginfo[reg]
+			if reg in reginfo:
+				line += " %-8s" % reginfo[reg]["name"]
+			print line
+	print "Total %d registers found." % cnt
+	print "===================================="
+
+def show_saved():
+	print "=========Saved/Restored Regs========"
+	i = 0
+	print "%10s: %5s: %s" % ("Reg", "Owner", "Name")
+	for reg in sorted(reginfo):
+		if not "Accessed" in reginfo[reg]:
+			continue;
+
+		if "Saved" in reginfo[reg]:
+			print "%10s: %5s: %s" %(hex(reg), reginfo[reg]["Owner"], reginfo[reg]["name"])
+			i += 1
+	print "Total %d registers" % i
+	print "===================================="
+
+if options.regname:
+	show_regname()
+elif options.untrack:
+	show_untracked()
+elif options.unuse:
+	show_unused()
+elif options.vdiff:
+	show_diff(path_vreg)
+elif options.sdiff:
+	show_diff(path_sreg)
+elif options.ctxswitch:
+	show_saved()
+elif options.gpuaccess:
+	show_gpu_access()
+else:
+	show_reginfo()

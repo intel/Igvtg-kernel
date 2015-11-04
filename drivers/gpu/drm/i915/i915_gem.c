@@ -136,6 +136,13 @@ i915_gem_wait_for_error(struct i915_gpu_error *error)
 	return 0;
 }
 
+int i915_wait_error_work_complete(struct drm_device *dev)
+{
+       struct drm_i915_private *dev_priv = dev->dev_private;
+
+       return i915_gem_wait_for_error(&dev_priv->gpu_error);
+}
+
 int i915_mutex_lock_interruptible(struct drm_device *dev)
 {
 	struct drm_i915_private *dev_priv = dev->dev_private;
@@ -159,6 +166,19 @@ i915_gem_object_is_inactive(struct drm_i915_gem_object *obj)
 	return i915_gem_obj_bound_any(obj) && !obj->active;
 }
 
+#ifdef DRM_I915_VGT_SUPPORT
+/*
+ * Get the number of assigned fence registers.
+ * through the PV INFO page.
+ */
+static inline int vgt_avail_fence_num(struct drm_i915_private *dev_priv)
+{
+	unsigned long   avail_fences;
+	avail_fences = I915_READ(vgt_info_off(avail_rs.fence_num));
+	return avail_fences;
+}
+#endif
+
 int
 i915_gem_get_aperture_ioctl(struct drm_device *dev, void *data,
 			    struct drm_file *file)
@@ -175,8 +195,13 @@ i915_gem_get_aperture_ioctl(struct drm_device *dev, void *data,
 			pinned += i915_gem_obj_ggtt_size(obj);
 	mutex_unlock(&dev->struct_mutex);
 
-	args->aper_size = dev_priv->gtt.base.total;
-	args->aper_available_size = args->aper_size - pinned;
+	if (!USES_VGT(ring->dev)) {
+		args->aper_size = dev_priv->gtt.base.total;
+		args->aper_available_size = args->aper_size - pinned;
+	} else {
+		args->aper_size = dev_priv->mm.vgt_low_gm_size + dev_priv->mm.vgt_high_gm_size;
+		args->aper_available_size = dev_priv->mm.vgt_low_gm_size + dev_priv->mm.vgt_high_gm_size - pinned;
+	}
 
 	return 0;
 }
@@ -3056,7 +3081,8 @@ int i915_vma_unbind(struct i915_vma *vma)
 	if (vma->pin_count)
 		return -EBUSY;
 
-	BUG_ON(obj->pages == NULL);
+	if (!obj->has_vmfb_mapping)
+		BUG_ON(obj->pages == NULL);
 
 	ret = i915_gem_object_finish_gpu(obj);
 	if (ret)
@@ -3069,7 +3095,7 @@ int i915_vma_unbind(struct i915_vma *vma)
 	/* Throw away the active reference before moving to the unbound list */
 	i915_gem_object_retire(obj);
 
-	if (i915_is_ggtt(vma->vm)) {
+	if (i915_is_ggtt(vma->vm) && !obj->has_vmfb_mapping) {
 		i915_gem_object_finish_gtt(obj);
 
 		/* release the fence reg _after_ flushing */
@@ -3086,12 +3112,14 @@ int i915_vma_unbind(struct i915_vma *vma)
 	if (i915_is_ggtt(vma->vm))
 		obj->map_and_fenceable = false;
 
-	drm_mm_remove_node(&vma->node);
+	if (!(obj->has_vmfb_mapping && i915_is_ggtt(vma->vm)))
+		drm_mm_remove_node(&vma->node);
+
 	i915_gem_vma_destroy(vma);
 
 	/* Since the unbound list is global, only move to that list if
 	 * no more VMAs exist. */
-	if (list_empty(&obj->vma_list)) {
+	if (list_empty(&obj->vma_list) && !obj->has_vmfb_mapping) {
 		i915_gem_gtt_finish_object(obj);
 		list_move_tail(&obj->global_list, &dev_priv->mm.unbound_list);
 	}
@@ -3546,15 +3574,22 @@ i915_gem_object_bind_to_vm(struct drm_i915_gem_object *obj,
 		return ERR_PTR(-E2BIG);
 	}
 
-	ret = i915_gem_object_get_pages(obj);
-	if (ret)
-		return ERR_PTR(ret);
+	if (!obj->has_vmfb_mapping) {
+		ret = i915_gem_object_get_pages(obj);
+		if (ret)
+			return ERR_PTR(ret);
 
-	i915_gem_object_pin_pages(obj);
+		i915_gem_object_pin_pages(obj);
+	}
 
 	vma = i915_gem_obj_lookup_or_create_vma(obj, vm);
 	if (IS_ERR(vma))
 		goto err_unpin;
+
+	if (obj->has_vmfb_mapping && i915_is_ggtt(vm)) {
+		vma->node.allocated = 1;
+		goto bind;
+	}
 
 search_free:
 	ret = drm_mm_insert_node_in_range_generic(&vm->mm, &vma->node,
@@ -3571,6 +3606,12 @@ search_free:
 		if (ret == 0)
 			goto search_free;
 
+		DRM_ERROR("fail to allocate space from %s GM space, size: %u.\n",
+				obj->map_and_fenceable ? "low" : "whole",
+				size);
+
+		dump_stack();
+
 		goto err_free_vma;
 	}
 	if (WARN_ON(!i915_gem_valid_gtt_space(vma, obj->cache_level))) {
@@ -3585,6 +3626,7 @@ search_free:
 	list_move_tail(&obj->global_list, &dev_priv->mm.bound_list);
 	list_add_tail(&vma->mm_list, &vm->inactive_list);
 
+bind:
 	trace_i915_vma_bind(vma, flags);
 	vma->bind_vma(vma, obj->cache_level,
 		      flags & PIN_GLOBAL ? GLOBAL_BIND : 0);
@@ -4641,6 +4683,10 @@ struct i915_vma *i915_gem_obj_to_vma(struct drm_i915_gem_object *obj,
 void i915_gem_vma_destroy(struct i915_vma *vma)
 {
 	struct i915_address_space *vm = NULL;
+
+	if (vma->obj->has_vmfb_mapping)
+		vma->node.allocated = 0;
+
 	WARN_ON(vma->node.allocated);
 
 	/* Keep the vma as a placeholder in the execbuffer reservation lists */
@@ -4896,25 +4942,18 @@ i915_gem_init_hw(struct drm_device *dev)
 	for (i = 0; i < NUM_L3_SLICES(dev); i++)
 		i915_gem_l3_remap(&dev_priv->ring[RCS], i);
 
-	/*
-	 * XXX: Contexts should only be initialized once. Doing a switch to the
-	 * default context switch however is something we'd like to do after
-	 * reset or thaw (the latter may not actually be necessary for HW, but
-	 * goes with our code better). Context switching requires rings (for
-	 * the do_switch), but before enabling PPGTT. So don't move this.
-	 */
+	ret = i915_ppgtt_init_hw(dev);
+	if (ret && ret != -EIO) {
+		DRM_ERROR("PPGTT enable failed %d\n", ret);
+		i915_gem_cleanup_ringbuffer(dev);
+	}
+
 	ret = i915_gem_context_enable(dev_priv);
 	if (ret && ret != -EIO) {
 		DRM_ERROR("Context enable failed %d\n", ret);
 		i915_gem_cleanup_ringbuffer(dev);
 
 		return ret;
-	}
-
-	ret = i915_ppgtt_init_hw(dev);
-	if (ret && ret != -EIO) {
-		DRM_ERROR("PPGTT enable failed %d\n", ret);
-		i915_gem_cleanup_ringbuffer(dev);
 	}
 
 	return ret;
@@ -4988,6 +5027,14 @@ i915_gem_cleanup_ringbuffer(struct drm_device *dev)
 
 	for_each_ring(ring, dev_priv, i)
 		dev_priv->gt.cleanup_ring(ring);
+
+	if (i915.enable_execlists)
+		/*
+		 * Neither the BIOS, ourselves or any other kernel
+		 * expects the system to be in execlists mode on startup,
+		 * so we need to reset the GPU back to legacy mode.
+		 */
+		intel_gpu_reset(dev);
 }
 
 static void
@@ -5056,6 +5103,12 @@ i915_gem_load(struct drm_device *dev)
 		dev_priv->num_fence_regs = 16;
 	else
 		dev_priv->num_fence_regs = 8;
+
+#ifdef DRM_I915_VGT_SUPPORT
+	if (USES_VGT(dev))
+		dev_priv->num_fence_regs = vgt_avail_fence_num(dev_priv);
+	printk("i915: the number of the fence registers (%d)\n", dev_priv->num_fence_regs);
+#endif
 
 	/* Initialize fence registers to zero */
 	INIT_LIST_HEAD(&dev_priv->mm.fence_list);

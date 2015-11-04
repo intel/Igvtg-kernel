@@ -63,6 +63,10 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/kvm.h>
 
+#ifdef CONFIG_KVMGT
+#include "kvmgt.h"
+#endif
+
 MODULE_AUTHOR("Qumranet");
 MODULE_LICENSE("GPL");
 
@@ -517,6 +521,9 @@ static struct kvm *kvm_create_vm(unsigned long type)
 	spin_lock(&kvm_lock);
 	list_add(&kvm->vm_list, &vm_list);
 	spin_unlock(&kvm_lock);
+#ifdef CONFIG_KVMGT
+	kvmgt_kvm_init(kvm);
+#endif
 
 	return kvm;
 
@@ -618,6 +625,9 @@ static void kvm_destroy_vm(struct kvm *kvm)
 	mmu_notifier_unregister(&kvm->mmu_notifier, kvm->mm);
 #else
 	kvm_arch_flush_shadow_all(kvm);
+#endif
+#ifdef CONFIG_KVMGT
+	kvmgt_kvm_exit(kvm);
 #endif
 	kvm_arch_destroy_vm(kvm);
 	kvm_destroy_devices(kvm);
@@ -739,8 +749,39 @@ static struct kvm_memslots *install_new_memslots(struct kvm *kvm,
 	slots->generation = old_memslots->generation + 1;
 
 	update_memslots(slots, new);
+#ifndef CONFIG_KVMGT
 	rcu_assign_pointer(kvm->memslots, slots);
 	synchronize_srcu_expedited(&kvm->srcu);
+#else
+	/*
+	 * This is a workaround to prevent deadlock.
+	 * The SRCU lock(aka kvm->srcu) is used to protect memslots and iodev of
+	 * a particular KVM guest. Some KVM APIs, say kvm_io_bus_register_dev()
+	 * and install_new_memslots(), requiring that the caller must *not* have
+	 * srcu read-locked.
+	 *
+	 * However, there are places we need to call such APIs:
+	 *
+	 *       - register/unregister a iodev for MMIO trap range
+	 *       - register a new memslot for aperture or opregion
+	 *
+	 * Before the calling, we have already have kvm->srcu read-locked. That
+	 * means, in API such as kvm_io_bus_register_dev(), we have self-recursive
+	 * dead locking.
+	 *
+	 * Given that, as long as we keep the CFG emulation in kernel, we have to
+	 * workaround this issue by simply(and brutally) ignore the SRCU logic
+	 * here. In the near future we will move the CFG into QEMU, which will
+	 * dismiss this trickiness.
+	 */
+	if (kvm->vgt_enabled) {
+		smp_wmb();
+		kvm->memslots = slots;
+	} else {
+		rcu_assign_pointer(kvm->memslots, slots);
+		synchronize_srcu_expedited(&kvm->srcu);
+	}
+#endif
 
 	/*
 	 * Increment the new memslot generation a second time. This prevents
@@ -811,6 +852,9 @@ int __kvm_set_memory_region(struct kvm *kvm,
 	new.base_gfn = base_gfn;
 	new.npages = npages;
 	new.flags = mem->flags;
+#ifdef CONFIG_KVMGT
+	new.pfn_list = NULL;
+#endif
 
 	if (npages) {
 		if (!old.npages)
@@ -878,6 +922,9 @@ int __kvm_set_memory_region(struct kvm *kvm,
 
 		/* slot was deleted or moved, clear iommu mapping */
 		kvm_iommu_unmap_pages(kvm, &old);
+#ifdef CONFIG_KVMGT
+		kvmgt_unpin_slot(kvm, &old);
+#endif
 		/* From this point no new shadow pages pointing to a deleted,
 		 * or moved, memslot will be created.
 		 *
@@ -929,6 +976,10 @@ int __kvm_set_memory_region(struct kvm *kvm,
 	 * here can be skipped.
 	 */
 	if ((change == KVM_MR_CREATE) || (change == KVM_MR_MOVE)) {
+#ifdef CONFIG_KVMGT
+		kvmgt_pin_slot(kvm, &new);
+		update_memslots(slots, &new);
+#endif
 		r = kvm_iommu_map_pages(kvm, &new);
 		return r;
 	}
@@ -2444,6 +2495,21 @@ static long kvm_vm_ioctl(struct file *filp,
 	case KVM_CREATE_VCPU:
 		r = kvm_vm_ioctl_create_vcpu(kvm, arg);
 		break;
+#ifdef CONFIG_KVMGT
+	case KVM_GET_DOMID:
+		r = kvm->domid;
+		break;
+	case KVM_VGT_SET_OPREGION: {
+		u32 gpa;
+
+		r = -EFAULT;
+		if (copy_from_user(&gpa, argp, sizeof(gpa)))
+			goto out;
+		kvm->opregion_gpa = gpa;
+		r = 0;
+		break;
+	}
+#endif
 	case KVM_SET_USER_MEMORY_REGION: {
 		struct kvm_userspace_memory_region kvm_userspace_mem;
 
@@ -3048,8 +3114,39 @@ int kvm_io_bus_register_dev(struct kvm *kvm, enum kvm_bus bus_idx, gpa_t addr,
 	memcpy(new_bus, bus, sizeof(*bus) + (bus->dev_count *
 	       sizeof(struct kvm_io_range)));
 	kvm_io_bus_insert_dev(new_bus, dev, addr, len);
+#ifndef CONFIG_KVMGT
 	rcu_assign_pointer(kvm->buses[bus_idx], new_bus);
 	synchronize_srcu_expedited(&kvm->srcu);
+#else
+	/*
+	 * This is a workaround to prevent deadlock.
+	 * The SRCU lock(aka kvm->srcu) is used to protect memslots and iodev of
+	 * a particular KVM guest. Some KVM APIs, say kvm_io_bus_register_dev()
+	 * and install_new_memslots(), requiring that the caller must *not* have
+	 * srcu read-locked.
+	 *
+	 * However, there are places we need to call such APIs:
+	 *
+	 *       - register/unregister a iodev for MMIO trap range
+	 *       - register a new memslot for aperture or opregion
+	 *
+	 * Before the calling, we have already have kvm->srcu read-locked. That
+	 * means, in API such as kvm_io_bus_register_dev(), we have self-recursive
+	 * dead locking.
+	 *
+	 * Given that, as long as we keep the CFG emulation in kernel, we have to
+	 * workaround this issue by simply(and brutally) ignore the SRCU logic
+	 * here. In the near future we will move the CFG into QEMU, which will
+	 * dismiss this trickiness.
+	 */
+	if (kvm->vgt_enabled) {
+		smp_wmb();
+		kvm->buses[bus_idx] = new_bus;
+	} else {
+		rcu_assign_pointer(kvm->buses[bus_idx], new_bus);
+		synchronize_srcu_expedited(&kvm->srcu);
+	}
+#endif
 	kfree(bus);
 
 	return 0;
@@ -3083,8 +3180,39 @@ int kvm_io_bus_unregister_dev(struct kvm *kvm, enum kvm_bus bus_idx,
 	memcpy(new_bus->range + i, bus->range + i + 1,
 	       (new_bus->dev_count - i) * sizeof(struct kvm_io_range));
 
+#ifndef CONFIG_KVMGT
 	rcu_assign_pointer(kvm->buses[bus_idx], new_bus);
 	synchronize_srcu_expedited(&kvm->srcu);
+#else
+	/*
+	 * This is a workaround to prevent deadlock.
+	 * The SRCU lock(aka kvm->srcu) is used to protect memslots and iodev of
+	 * a particular KVM guest. Some KVM APIs, say kvm_io_bus_register_dev()
+	 * and install_new_memslots(), requiring that the caller must *not* have
+	 * srcu read-locked.
+	 *
+	 * However, there are places we need to call such APIs:
+	 *
+	 *       - register/unregister a iodev for MMIO trap range
+	 *       - register a new memslot for aperture or opregion
+	 *
+	 * Before the calling, we have already have kvm->srcu read-locked. That
+	 * means, in API such as kvm_io_bus_register_dev(), we have self-recursive
+	 * dead locking.
+	 *
+	 * Given that, as long as we keep the CFG emulation in kernel, we have to
+	 * workaround this issue by simply(and brutally) ignore the SRCU logic
+	 * here. In the near future we will move the CFG into QEMU, which will
+	 * dismiss this trickiness.
+	 */
+	if (kvm->vgt_enabled) {
+		smp_wmb();
+		kvm->buses[bus_idx] = new_bus;
+	} else {
+		rcu_assign_pointer(kvm->buses[bus_idx], new_bus);
+		synchronize_srcu_expedited(&kvm->srcu);
+	}
+#endif
 	kfree(bus);
 	return r;
 }

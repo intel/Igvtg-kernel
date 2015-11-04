@@ -6646,8 +6646,7 @@ static void broadwell_init_clock_gating(struct drm_device *dev)
 	I915_WRITE(WM2_LP_ILK, 0);
 	I915_WRITE(WM1_LP_ILK, 0);
 
-	/* WaSwitchSolVfFArbitrationPriority:bdw */
-	I915_WRITE(GAM_ECOCHK, I915_READ(GAM_ECOCHK) | HSW_ECOCHK_ARB_PRIO_SOL);
+	I915_WRITE(GAM_ECOCHK, I915_READ(GAM_ECOCHK) | ECOCHK_PPGTT_WB_HSW);
 
 	/* WaPsrDPAMaskVBlankInSRD:bdw */
 	I915_WRITE(CHICKEN_PAR1_1,
@@ -6672,6 +6671,22 @@ static void broadwell_init_clock_gating(struct drm_device *dev)
 	/* WaDisableSDEUnitClockGating:bdw */
 	I915_WRITE(GEN8_UCGCTL6, I915_READ(GEN8_UCGCTL6) |
 		   GEN8_SDEUNIT_CLOCK_GATE_DISABLE);
+
+	if (i915.enable_execlists) {
+		/* WaOCLCoherentLineFlush:bdw */
+		I915_WRITE(GEN8_L3SQCREG4, I915_READ(GEN8_L3SQCREG4) |
+			   GEN8_PIPELINE_FLUSH_COHERENT_LINES);
+
+		/* WaGttCachingOffByDefault:bdw */
+		I915_WRITE(GEN8_GTT_CACHE_EN, GEN8_GTT_CACHE_DEFAULT);
+
+		/* WaDisableMidThreadPreempt:bdw */
+		I915_WRITE(GEN8_FF_SLICE_CS_CHICKEN2,
+			   I915_READ(GEN8_FF_SLICE_CS_CHICKEN2) |
+			   _MASKED_BIT_ENABLE(GEN8_THREAD_GROUP_PREEMPTION));
+	}
+
+	I915_WRITE(0xb10c, (I915_READ(0xb10c) & ~(0xf << 20)) | (0x8 << 20));
 
 	lpt_init_clock_gating(dev);
 }

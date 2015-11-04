@@ -99,6 +99,9 @@ static void vlv_prepare_pll(struct intel_crtc *crtc,
 static void chv_prepare_pll(struct intel_crtc *crtc,
 			    const struct intel_crtc_config *pipe_config);
 
+static void page_flip_completed(struct intel_crtc *intel_crtc);
+static bool page_flip_finished(struct intel_crtc *crtc);
+
 static struct intel_encoder *intel_find_encoder(struct intel_connector *connector, int pipe)
 {
 	if (!connector->mst_port)
@@ -2113,6 +2116,8 @@ void intel_flush_primary_plane(struct drm_i915_private *dev_priv,
 	struct drm_device *dev = dev_priv->dev;
 	u32 reg = INTEL_INFO(dev)->gen >= 4 ? DSPSURF(plane) : DSPADDR(plane);
 
+	printk("i915: intel_flush_display_plane\n");
+
 	I915_WRITE(reg, I915_READ(reg));
 	POSTING_READ(reg);
 }
@@ -2910,6 +2915,15 @@ static bool intel_crtc_has_pending_flip(struct drm_crtc *crtc)
 
 	spin_lock_irq(&dev->event_lock);
 	pending = to_intel_crtc(crtc)->unpin_work != NULL;
+	/* Re-check the page flip status in vgt as in suspending
+	 * process flip done interrupt may be lost due to vgt_thread
+	 * is frozen before i915_pm_suspend.
+	 */
+	if (i915.enable_vgt && pending) {
+		pending = !page_flip_finished(intel_crtc);
+		if (!pending)
+			page_flip_completed(intel_crtc);
+	}
 	spin_unlock_irq(&dev->event_lock);
 
 	return pending;
@@ -3321,7 +3335,7 @@ static void gen6_fdi_link_train(struct drm_crtc *crtc)
 	if (i == 4)
 		DRM_ERROR("FDI train 2 fail!\n");
 
-	DRM_DEBUG_KMS("FDI train done.\n");
+	printk("FDI train done.\n");
 }
 
 /* Manual link training for Ivy Bridge A0 parts */
@@ -3362,6 +3376,9 @@ static void ivb_manual_fdi_link_train(struct drm_crtc *crtc)
 		temp &= ~FDI_LINK_TRAIN_PATTERN_MASK_CPT;
 		temp &= ~FDI_RX_ENABLE;
 		I915_WRITE(reg, temp);
+
+		POSTING_READ(reg);
+		udelay(150);
 
 		/* enable CPU FDI TX and PCH FDI RX */
 		reg = FDI_TX_CTL(pipe);
@@ -3404,6 +3421,9 @@ static void ivb_manual_fdi_link_train(struct drm_crtc *crtc)
 			DRM_DEBUG_KMS("FDI train 1 fail on vswing %d\n", j / 2);
 			continue;
 		}
+
+		POSTING_READ(reg);
+		udelay(150);
 
 		/* Train 2 */
 		reg = FDI_TX_CTL(pipe);
@@ -9239,7 +9259,10 @@ void intel_prepare_page_flip(struct drm_device *dev, int plane)
 	 * is also accompanied by a spurious intel_prepare_page_flip().
 	 */
 	spin_lock_irqsave(&dev->event_lock, flags);
-	if (intel_crtc->unpin_work && page_flip_finished(intel_crtc))
+	/* There is case that flip interrupts come early before intel_crtc
+	 * is initalized. Add a sanity check before use it.
+	 */
+	if (intel_crtc && intel_crtc->unpin_work && page_flip_finished(intel_crtc))
 		atomic_inc_not_zero(&intel_crtc->unpin_work->pending);
 	spin_unlock_irqrestore(&dev->event_lock, flags);
 }
@@ -11526,6 +11549,8 @@ static int intel_crtc_set_config(struct drm_mode_set *set)
 	struct intel_crtc_config *pipe_config;
 	unsigned modeset_pipes, prepare_pipes, disable_pipes;
 	int ret;
+	
+	struct drm_i915_private *dev_priv;
 
 	BUG_ON(!set);
 	BUG_ON(!set->crtc);
@@ -11544,6 +11569,7 @@ static int intel_crtc_set_config(struct drm_mode_set *set)
 	}
 
 	dev = set->crtc->dev;
+	dev_priv = dev->dev_private;
 
 	ret = -ENOMEM;
 	config = kzalloc(sizeof(*config), GFP_KERNEL);

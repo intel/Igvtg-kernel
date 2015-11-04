@@ -301,6 +301,22 @@ __oprofile_add_ext_sample(unsigned long pc, struct pt_regs * const regs,
 	unsigned long backtrace = oprofile_backtrace_depth;
 
 	/*
+	 * GPU sampling.
+	 */
+	if ( !pv_info.paravirt_enabled ) {
+		/* Running in native or HVM guest */
+		extern void gpu_perf_sample(void);
+		gpu_perf_sample();
+	}
+#ifdef  CONFIG_XEN_DOM0
+	else {
+		/* Xen Domain0 */
+		extern void vgt_gpu_perf_sample(void);
+		vgt_gpu_perf_sample();
+	}
+#endif
+
+	/*
 	 * if log_sample() fail we can't backtrace since we lost the
 	 * source of this event
 	 */

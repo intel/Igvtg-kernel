@@ -6,6 +6,8 @@
 void intel_gtt_get(size_t *gtt_total, size_t *stolen_size,
 		   phys_addr_t *mappable_base, unsigned long *mappable_end);
 
+struct agp_bridge_data;
+
 int intel_gmch_probe(struct pci_dev *bridge_pdev, struct pci_dev *gpu_pdev,
 		     struct agp_bridge_data *bridge);
 void intel_gmch_remove(void);

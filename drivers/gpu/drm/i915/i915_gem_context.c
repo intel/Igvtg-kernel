@@ -320,6 +320,9 @@ int i915_gem_context_init(struct drm_device *dev)
 	struct intel_context *ctx;
 	int i;
 
+	if (i915.ctx_switch == false)
+		return 0;
+
 	/* Init should only be called once per module load. Eventually the
 	 * restriction on the context_disabled check can be loosened. */
 	if (WARN_ON(dev_priv->ring[RCS].default_context))
@@ -492,7 +495,7 @@ mi_set_context(struct intel_engine_cs *ring,
 	}
 
 	/* These flags are for resource streamer on HSW+ */
-	if (!IS_HASWELL(ring->dev) && INTEL_INFO(ring->dev)->gen < 8)
+	if ((!IS_HASWELL(ring->dev) || USES_VGT(ring->dev)) && INTEL_INFO(ring->dev)->gen < 8)
 		flags |= (MI_SAVE_EXT_STATE_EN | MI_RESTORE_EXT_STATE_EN);
 
 

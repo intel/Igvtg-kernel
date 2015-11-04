@@ -38,6 +38,7 @@ struct i915_params i915 __read_mostly = {
 	.enable_execlists = 0,
 	.enable_hangcheck = true,
 	.enable_ppgtt = -1,
+	.ctx_switch = true,
 	.enable_psr = 0,
 	.preliminary_hw_support = IS_ENABLED(CONFIG_DRM_I915_PRELIMINARY_HW_SUPPORT),
 	.disable_power_well = 1,
@@ -51,6 +52,7 @@ struct i915_params i915 __read_mostly = {
 	.disable_vtd_wa = 0,
 	.use_mmio_flip = 0,
 	.mmio_debug = 0,
+	.enable_vgt = 0,
 };
 
 module_param_named(modeset, i915.modeset, int, 0400);
@@ -118,6 +120,10 @@ module_param_named_unsafe(enable_ppgtt, i915.enable_ppgtt, int, 0400);
 MODULE_PARM_DESC(enable_ppgtt,
 	"Override PPGTT usage. "
 	"(-1=auto [default], 0=disabled, 1=aliasing, 2=full)");
+
+module_param_named(ctx_switch, i915.ctx_switch, bool, 0600);
+MODULE_PARM_DESC(ctx_switch,
+                "Enable HW context switch (default: true)");
 
 module_param_named(enable_execlists, i915.enable_execlists, int, 0400);
 MODULE_PARM_DESC(enable_execlists,

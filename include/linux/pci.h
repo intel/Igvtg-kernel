@@ -1870,4 +1870,9 @@ static inline bool pci_is_dev_assigned(struct pci_dev *pdev)
 {
 	return (pdev->dev_flags & PCI_DEV_FLAGS_ASSIGNED) == PCI_DEV_FLAGS_ASSIGNED;
 }
+
+/* VGT device definition */
+#define VGT_BUS_ID	0
+#define VGT_DEVFN	0x10	/* B:D:F = 0:2:0 */
+
 #endif /* LINUX_PCI_H */

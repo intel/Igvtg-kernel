@@ -224,7 +224,7 @@ int intel_sanitize_enable_execlists(struct drm_device *dev, int enable_execlists
 	if (INTEL_INFO(dev)->gen >= 9)
 		return 1;
 
-	if (enable_execlists == 0)
+	if (enable_execlists == 0 && !USES_VGT(dev))
 		return 0;
 
 	if (HAS_LOGICAL_RING_CONTEXTS(dev) && USES_PPGTT(dev) &&
@@ -285,6 +285,7 @@ static void execlists_elsp_write(struct intel_engine_cs *ring,
 	uint64_t temp = 0;
 	uint32_t desc[4];
 	unsigned long flags;
+	bool force_wake = !(USES_VGT(ring->dev) && !i915_host_mediate);
 
 	/* XXX: You must always write both descriptors in the order below. */
 	if (ctx_obj1)
@@ -305,25 +306,27 @@ static void execlists_elsp_write(struct intel_engine_cs *ring,
 	 * because that function calls intel_runtime_pm_get(), which might sleep.
 	 * Instead, we do the runtime_pm_get/put when creating/destroying requests.
 	 */
-	spin_lock_irqsave(&dev_priv->uncore.lock, flags);
-	if (IS_CHERRYVIEW(dev) || INTEL_INFO(dev)->gen >= 9) {
-		if (dev_priv->uncore.fw_rendercount++ == 0)
-			dev_priv->uncore.funcs.force_wake_get(dev_priv,
-							      FORCEWAKE_RENDER);
-		if (dev_priv->uncore.fw_mediacount++ == 0)
-			dev_priv->uncore.funcs.force_wake_get(dev_priv,
-							      FORCEWAKE_MEDIA);
-		if (INTEL_INFO(dev)->gen >= 9) {
-			if (dev_priv->uncore.fw_blittercount++ == 0)
+	if (force_wake) {
+		spin_lock_irqsave(&dev_priv->uncore.lock, flags);
+		if (IS_CHERRYVIEW(dev) || INTEL_INFO(dev)->gen >= 9) {
+			if (dev_priv->uncore.fw_rendercount++ == 0)
 				dev_priv->uncore.funcs.force_wake_get(dev_priv,
+						FORCEWAKE_RENDER);
+			if (dev_priv->uncore.fw_mediacount++ == 0)
+				dev_priv->uncore.funcs.force_wake_get(dev_priv,
+						FORCEWAKE_MEDIA);
+			if (INTEL_INFO(dev)->gen >= 9) {
+				if (dev_priv->uncore.fw_blittercount++ == 0)
+					dev_priv->uncore.funcs.force_wake_get(dev_priv,
 							FORCEWAKE_BLITTER);
+			}
+		} else {
+			if (dev_priv->uncore.forcewake_count++ == 0)
+				dev_priv->uncore.funcs.force_wake_get(dev_priv,
+						FORCEWAKE_ALL);
 		}
-	} else {
-		if (dev_priv->uncore.forcewake_count++ == 0)
-			dev_priv->uncore.funcs.force_wake_get(dev_priv,
-							      FORCEWAKE_ALL);
+		spin_unlock_irqrestore(&dev_priv->uncore.lock, flags);
 	}
-	spin_unlock_irqrestore(&dev_priv->uncore.lock, flags);
 
 	I915_WRITE(RING_ELSP(ring), desc[1]);
 	I915_WRITE(RING_ELSP(ring), desc[0]);
@@ -334,27 +337,28 @@ static void execlists_elsp_write(struct intel_engine_cs *ring,
 	/* ELSP is a wo register, so use another nearby reg for posting instead */
 	POSTING_READ(RING_EXECLIST_STATUS(ring));
 
-	/* Release Force Wakeup (see the big comment above). */
-	spin_lock_irqsave(&dev_priv->uncore.lock, flags);
-	if (IS_CHERRYVIEW(dev) || INTEL_INFO(dev)->gen >= 9) {
-		if (--dev_priv->uncore.fw_rendercount == 0)
-			dev_priv->uncore.funcs.force_wake_put(dev_priv,
-							      FORCEWAKE_RENDER);
-		if (--dev_priv->uncore.fw_mediacount == 0)
-			dev_priv->uncore.funcs.force_wake_put(dev_priv,
-							      FORCEWAKE_MEDIA);
-		if (INTEL_INFO(dev)->gen >= 9) {
-			if (--dev_priv->uncore.fw_blittercount == 0)
+	if (force_wake) {
+		/* Release Force Wakeup (see the big comment above). */
+		spin_lock_irqsave(&dev_priv->uncore.lock, flags);
+		if (IS_CHERRYVIEW(dev) || INTEL_INFO(dev)->gen >= 9) {
+			if (--dev_priv->uncore.fw_rendercount == 0)
 				dev_priv->uncore.funcs.force_wake_put(dev_priv,
+						FORCEWAKE_RENDER);
+			if (--dev_priv->uncore.fw_mediacount == 0)
+				dev_priv->uncore.funcs.force_wake_put(dev_priv,
+						FORCEWAKE_MEDIA);
+			if (INTEL_INFO(dev)->gen >= 9) {
+				if (--dev_priv->uncore.fw_blittercount == 0)
+					dev_priv->uncore.funcs.force_wake_put(dev_priv,
 							FORCEWAKE_BLITTER);
+			}
+		} else {
+			if (--dev_priv->uncore.forcewake_count == 0)
+				dev_priv->uncore.funcs.force_wake_put(dev_priv,
+						FORCEWAKE_ALL);
 		}
-	} else {
-		if (--dev_priv->uncore.forcewake_count == 0)
-			dev_priv->uncore.funcs.force_wake_put(dev_priv,
-							      FORCEWAKE_ALL);
+		spin_unlock_irqrestore(&dev_priv->uncore.lock, flags);
 	}
-
-	spin_unlock_irqrestore(&dev_priv->uncore.lock, flags);
 }
 
 static int execlists_update_context(struct drm_i915_gem_object *ctx_obj,
@@ -530,7 +534,7 @@ void intel_execlists_handle_ctx_events(struct intel_engine_cs *ring)
 	ring->next_context_status_buffer = write_pointer % 6;
 
 	I915_WRITE(RING_CONTEXT_STATUS_PTR(ring),
-		   ((u32)ring->next_context_status_buffer & 0x07) << 8);
+		   (((u32)ring->next_context_status_buffer & 0x07) << 8) | 0x07000000);
 }
 
 static int execlists_context_queue(struct intel_engine_cs *ring,
@@ -1624,6 +1628,21 @@ out:
 	return ret;
 }
 
+static void intel_lr_context_notify_vgt(struct drm_i915_gem_object *ctx_obj,
+					struct drm_device *dev, int msg)
+{
+	struct drm_i915_private *dev_priv = dev->dev_private;
+
+	u64 tmp = execlists_ctx_descriptor(ctx_obj);
+
+	I915_WRITE(vgt_info_off(execlist_context_descriptor_lo),
+			tmp & 0xffffffff);
+	I915_WRITE(vgt_info_off(execlist_context_descriptor_hi),
+			tmp >> 32);
+
+	I915_WRITE(vgt_info_off(g2v_notify), msg);
+}
+
 static int
 populate_lr_context(struct intel_context *ctx, struct drm_i915_gem_object *ctx_obj,
 		    struct intel_engine_cs *ring, struct intel_ringbuffer *ringbuf)
@@ -1730,6 +1749,19 @@ populate_lr_context(struct intel_context *ctx, struct drm_i915_gem_object *ctx_o
 		reg_state[CTX_R_PWR_CLK_STATE+1] = 0;
 	}
 
+	if (USES_VGT(ring->dev)) {
+		/* Allocate VMA instantly. */
+		ret = i915_gem_obj_ggtt_pin(ctx_obj,
+				GEN8_LR_CONTEXT_ALIGN, 0);
+		if (ret) {
+			DRM_DEBUG_DRIVER("Pin LRC backing obj failed: %d\n",
+					ret);
+			return ret;
+		}
+		intel_lr_context_notify_vgt(ctx_obj, ring->dev,
+				VGT_G2V_EXECLIST_CONTEXT_ELEMENT_CREATE);
+	}
+
 	kunmap_atomic(reg_state);
 
 	ctx_obj->dirty = 1;
@@ -1758,6 +1790,12 @@ void intel_lr_context_free(struct intel_context *ctx)
 			struct intel_ringbuffer *ringbuf =
 					ctx->engine[i].ringbuf;
 			struct intel_engine_cs *ring = ringbuf->ring;
+
+			if (USES_VGT(ringbuf->ring->dev)) {
+				intel_lr_context_notify_vgt(ctx_obj, ringbuf->ring->dev,
+						VGT_G2V_EXECLIST_CONTEXT_ELEMENT_DESTROY);
+				i915_gem_object_ggtt_unpin(ctx_obj);
+			}
 
 			if (ctx == ring->default_context) {
 				intel_unpin_ringbuffer_obj(ringbuf);

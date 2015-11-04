@@ -30,6 +30,7 @@ i915-y += i915_cmd_parser.o \
 	  i915_gem_stolen.o \
 	  i915_gem_tiling.o \
 	  i915_gem_userptr.o \
+	  i915_gem_vgtbuffer.o \
 	  i915_gpu_error.o \
 	  i915_irq.o \
 	  i915_trace_points.o \
@@ -85,5 +86,30 @@ i915-y += i915_dma.o \
 	  i915_ums.o
 
 obj-$(CONFIG_DRM_I915)  += i915.o
+
+VGT := vgt
+ccflags-$(CONFIG_I915_VGT) += -I$(src)/$(VGT) -I$(src) -Wall
+i915-$(CONFIG_I915_VGT)  += $(VGT)/vgt.o	\
+			   $(VGT)/render.o \
+			   $(VGT)/mmio.o \
+			   $(VGT)/handlers.o \
+			   $(VGT)/interrupt.o \
+			   $(VGT)/sysfs.o \
+			   $(VGT)/display.o \
+			   $(VGT)/debugfs.o \
+			   $(VGT)/edid.o \
+			   $(VGT)/gtt.o \
+			   $(VGT)/aperture_gm.o \
+			   $(VGT)/utility.o \
+			   $(VGT)/klog.o \
+			   $(VGT)/dev.o \
+			   $(VGT)/cmd_parser.o \
+			   $(VGT)/sched.o \
+			   $(VGT)/instance.o \
+			   $(VGT)/cfg_space.o \
+			   $(VGT)/fb_decoder.o \
+			   $(VGT)/vbios.o \
+			   $(VGT)/host.o \
+			   $(VGT)/execlists.o
 
 CFLAGS_i915_trace_points.o := -I$(src)

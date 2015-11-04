@@ -137,6 +137,9 @@
 #define GEN8_RING_PDP_UDW(ring, n)	((ring)->mmio_base+0x270 + ((n) * 8 + 4))
 #define GEN8_RING_PDP_LDW(ring, n)	((ring)->mmio_base+0x270 + (n) * 8)
 
+#define GEN8_GTT_CACHE_EN		0x4024
+#define   GEN8_GTT_CACHE_DEFAULT	0xf0007fff
+
 #define GAM_ECOCHK			0x4090
 #define   ECOCHK_SNB_BIT		(1<<10)
 #define   HSW_ECOCHK_ARB_PRIO_SOL	(1<<6)
@@ -1431,6 +1434,9 @@ enum punit_power_well {
 #define MI_STATE	0x020e4 /* gen2 only */
 #define   MI_AGPBUSY_INT_EN			(1 << 1) /* 85x only */
 #define   MI_AGPBUSY_830_MODE			(1 << 0) /* 85x only */
+
+#define GEN8_FF_SLICE_CS_CHICKEN2		0x20e4
+#define   GEN8_THREAD_GROUP_PREEMPTION		(1<<1)
 
 #define CACHE_MODE_0	0x02120 /* 915+ only */
 #define   CM0_PIPELINED_RENDER_FLUSH_DISABLE (1<<8)
@@ -5161,6 +5167,9 @@ enum punit_power_well {
 #define GEN7_L3SQCREG1				0xB010
 #define  VLV_B0_WA_L3SQCREG1_VALUE		0x00D30000
 
+#define GEN8_L3SQCREG1				0xB100
+#define  BDW_WA_L3SQCREG1_DEFAULT		0x784000
+
 #define GEN7_L3CNTLREG1				0xB01C
 #define  GEN7_WA_FOR_GEN7_L3_CONTROL			0x3C47FF8C
 #define  GEN7_L3AGDIS				(1<<19)
@@ -5172,6 +5181,9 @@ enum punit_power_well {
 
 #define GEN7_L3SQCREG4				0xb034
 #define  L3SQ_URB_READ_CAM_MATCH_DISABLE	(1<<27)
+
+#define GEN8_L3SQCREG4				0xb118
+#define  GEN8_PIPELINE_FLUSH_COHERENT_LINES	(1<<21)
 
 /* GEN8 chicken */
 #define HDC_CHICKEN0				0x7300

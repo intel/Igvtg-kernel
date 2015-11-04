@@ -92,6 +92,9 @@ static int i915_getparam(struct drm_device *dev, void *data,
 	case I915_PARAM_HAS_VEBOX:
 		value = intel_ring_initialized(&dev_priv->ring[VECS]);
 		break;
+	case I915_PARAM_HAS_BSD2:
+		value = intel_ring_initialized(&dev_priv->ring[VCS2]);
+		break;
 	case I915_PARAM_HAS_RELAXED_FENCING:
 		value = 1;
 		break;
@@ -611,6 +614,8 @@ static void intel_device_info_runtime_init(struct drm_device *dev)
  *   - allocate initial config memory
  *   - setup the DRM framebuffer with the allocated memory
  */
+struct drm_i915_private *gpu_perf_dev_priv;
+
 int i915_driver_load(struct drm_device *dev, unsigned long flags)
 {
 	struct drm_i915_private *dev_priv;
@@ -635,7 +640,8 @@ int i915_driver_load(struct drm_device *dev, unsigned long flags)
 	if (dev_priv == NULL)
 		return -ENOMEM;
 
-	dev->dev_private = dev_priv;
+	dev->dev_private = (void *)dev_priv;
+	gpu_perf_dev_priv = (void *)dev_priv;
 	dev_priv->dev = dev;
 
 	/* Setup the write-once "constant" device info */
@@ -696,6 +702,23 @@ int i915_driver_load(struct drm_device *dev, unsigned long flags)
 
 	intel_uncore_init(dev);
 
+	if (i915_start_vgt(dev->pdev))
+		i915_host_mediate = true;
+	printk("i915_start_vgt: %s\n", i915_host_mediate ? "success" : "fail");
+
+	if (i915_host_mediate) {
+		extern bool (*tmp_vgt_can_process_timer)(void *timer);
+		extern void (*tmp_vgt_new_delay_event_timer)(void *timer);
+
+		tmp_vgt_new_delay_event_timer = vgt_new_delay_event_timer;
+		tmp_vgt_can_process_timer = vgt_can_process_timer;
+	}
+
+	i915_check_vgt(dev_priv);
+	if (USES_VGT(dev)){
+		i915.enable_fbc = 0;
+		i915.enable_ips = 0;
+	}
 	ret = i915_gem_gtt_init(dev);
 	if (ret)
 		goto out_regs;
@@ -815,6 +838,17 @@ int i915_driver_load(struct drm_device *dev, unsigned long flags)
 			DRM_ERROR("failed to init modeset\n");
 			goto out_power_well;
 		}
+#ifdef DRM_I915_VGT_SUPPORT
+		if (USES_VGT(dev)) {
+			/*
+			 * Tell VGT that we have a valid surface to show
+			 * after modesetting. We doesn't distinguish DOM0 and
+			 * Linux guest here, The PVINFO write handler will
+			 * handle this.
+			 */
+			I915_WRITE(vgt_info_off(display_ready), 1);
+		}
+#endif
 	}
 
 	i915_setup_sysfs(dev);
@@ -898,6 +932,10 @@ int i915_driver_unload(struct drm_device *dev)
 	if (drm_core_check_feature(dev, DRIVER_MODESET)) {
 		intel_modeset_cleanup(dev);
 
+		if (i915_host_mediate) {
+			i915_stop_vgt();
+			i915_host_mediate = false;
+		}
 		/*
 		 * free the memory space allocated for the child device
 		 * config parsed from VBT
@@ -1055,6 +1093,7 @@ const struct drm_ioctl_desc i915_ioctls[] = {
 	DRM_IOCTL_DEF_DRV(I915_REG_READ, i915_reg_read_ioctl, DRM_UNLOCKED|DRM_RENDER_ALLOW),
 	DRM_IOCTL_DEF_DRV(I915_GET_RESET_STATS, i915_get_reset_stats_ioctl, DRM_UNLOCKED|DRM_RENDER_ALLOW),
 	DRM_IOCTL_DEF_DRV(I915_GEM_USERPTR, i915_gem_userptr_ioctl, DRM_UNLOCKED|DRM_RENDER_ALLOW),
+	DRM_IOCTL_DEF_DRV(I915_GEM_VGTBUFFER, i915_gem_vgtbuffer_ioctl, DRM_UNLOCKED),
 };
 
 int i915_max_ioctl = ARRAY_SIZE(i915_ioctls);

@@ -286,6 +286,7 @@ dotraplinkage void do_double_fault(struct pt_regs *regs, long error_code)
 }
 #endif
 
+
 dotraplinkage void
 do_general_protection(struct pt_regs *regs, long error_code)
 {

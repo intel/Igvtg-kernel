@@ -34,11 +34,14 @@
 #include "i915_drv.h"
 #include "i915_trace.h"
 #include "intel_drv.h"
+#include "vgt-if.h"
 
 #include <linux/console.h>
 #include <linux/module.h>
 #include <linux/pm_runtime.h>
 #include <drm/drm_crtc_helper.h>
+
+bool i915_host_mediate __read_mostly = false;
 
 static struct drm_driver driver;
 
@@ -422,6 +425,8 @@ void intel_detect_pch(struct drm_device *dev)
 	struct drm_i915_private *dev_priv = dev->dev_private;
 	struct pci_dev *pch = NULL;
 
+	printk("i915: intel_detect_pch\n");
+
 	/* In all current cases, num_pipes is equivalent to the PCH_NOP setting
 	 * (which really amounts to a PCH but no South Display).
 	 */
@@ -674,6 +679,7 @@ int i915_suspend_legacy(struct drm_device *dev, pm_message_t state)
 static int i915_drm_resume(struct drm_device *dev)
 {
 	struct drm_i915_private *dev_priv = dev->dev_private;
+	int ret = 0;
 
 	if (drm_core_check_feature(dev, DRIVER_MODESET)) {
 		mutex_lock(&dev->struct_mutex);
@@ -926,6 +932,7 @@ static int i915_pm_suspend(struct device *dev)
 {
 	struct pci_dev *pdev = to_pci_dev(dev);
 	struct drm_device *drm_dev = pci_get_drvdata(pdev);
+	int error;
 
 	if (!drm_dev || !drm_dev->dev_private) {
 		dev_err(dev, "DRM not initialized, aborting suspend.\n");
@@ -935,7 +942,18 @@ static int i915_pm_suspend(struct device *dev)
 	if (drm_dev->switch_power_state == DRM_SWITCH_POWER_OFF)
 		return 0;
 
-	return i915_drm_suspend(drm_dev);
+	error = i915_drm_suspend(drm_dev);
+	if (error)
+		return error;
+
+#ifdef CONFIG_I915_VGT
+	if (i915_host_mediate) {
+		error = vgt_suspend(pdev);
+		if (error)
+			return error;
+	}
+#endif
+	return 0;
 }
 
 static int i915_pm_suspend_late(struct device *dev)
@@ -976,6 +994,14 @@ static int i915_pm_resume(struct device *dev)
 
 	if (drm_dev->switch_power_state == DRM_SWITCH_POWER_OFF)
 		return 0;
+
+#ifdef DRM_I915_VGT_SUPPORT
+	if (i915_host_mediate) {
+		int error = vgt_resume(drm_dev->pdev);
+		if (error)
+			return error;
+	}
+#endif
 
 	return i915_drm_resume(drm_dev);
 }
