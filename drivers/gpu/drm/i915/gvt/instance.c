@@ -228,6 +228,8 @@ struct vgt_device *gvt_create_instance(struct pgt_device *pdev,
 	vgt->id = id;
 	vgt->pdev = pdev;
 
+	vgt->warn_untrack = true;
+
 	if (!create_virtual_device_state(vgt, info))
 		goto err;
 

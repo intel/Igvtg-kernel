@@ -68,6 +68,107 @@
 #define    _REGBIT_BDW_GMCH_GMS_SHIFT   8
 #define    _REGBIT_BDW_GMCH_GMS_MASK    0xff
 
+#define _GVT_MMIO_THROUGH_OFFSET(index, a, b)	((a) + (index)*((b)-(a)))
+#define _GVT_MMIO_GET_INDEX(reg, a, b)		(((reg)-(a))/((b)-(a)))
+
+#define _GVT_GET_PIPE(reg, a, b)	_GVT_MMIO_GET_INDEX(reg, a, b)
+#define _GVT_GET_PORT(reg, a, b)	_GVT_MMIO_GET_INDEX(reg, a, b)
+
+#define _REG_GAC_MODE		0x120A0
+#define _REG_GAB_MODE		0x220A0
+
+#define _REG_RCS_BB_ADDR	0x2140
+#define _REG_VCS_BB_ADDR	0x12140
+#define _REG_BCS_BB_ADDR	0x22140
+#define _REG_VECS_BB_ADDR	0x1A140
+#define _REG_VCS2_BB_ADDR	0x1c140
+
+#define _REG_VECS_CTX_WA_BB_ADDR 0x1A144
+
+#define _REG_RCS_EXCC		0x2028
+#define _REG_VCS_EXCC		0x12028
+#define _REG_BCS_EXCC		0x22028
+#define _REG_VECS_EXCC		0x1A028
+#define _REG_VCS2_EXCC		0x1c028
+
+#define _REG_RCS_UHPTR		0x2134
+#define _REG_VCS_UHPTR		0x12134
+#define _REG_BCS_UHPTR		0x22134
+#define _REG_VECS_UHPTR		0x1A134
+#define _REG_VCS2_UHPTR		0x1c134
+
+#define _REG_RCS_ACTHD_UDW	0x205c
+#define _REG_VCS_ACTHD_UDW	0x1205c
+#define _REG_BCS_ACTHD_UDW	0x2205c
+#define _REG_VECS_ACTHD_UDW	0x1A05c
+#define _REG_VCS2_ACTHD_UDW	0x1c05c
+
+#define _REG_RCS_BB_PREEMPT_ADDR	0x2148
+#define _REG_RCS_BB_ADDR_DIFF		0x2154
+
+#define _REG_RCS_TIMESTAMP	0x2358
+#define _REG_VCS_TIMESTAMP	0x12358
+#define _REG_VCS2_TIMESTAMP	0x1c358
+#define _REG_BCS_TIMESTAMP	0x22358
+
+#define GVT_RING_MODE(base) (base + 0x29c)
+
+#define RB_HEAD_OFF_MASK        ((1U << 21) - (1U << 2))
+#define RB_TAIL_OFF_MASK       ((1U << 21) - (1U << 3))        /* bit 3 to 20 */
+#define RB_TAIL_SIZE_MASK      ((1U << 21) - (1U << 12))       /* bit 12 to 20 */
+#define _RING_CTL_BUF_SIZE(ctl)        (((ctl) & RB_TAIL_SIZE_MASK) + GTT_PAGE_SIZE)
+
+#define _EL_BASE_RCS		0x02000
+#define _EL_BASE_VCS		0x12000
+#define _EL_BASE_VECS		0x1A000
+#define _EL_BASE_VCS2		0x1C000
+#define _EL_BASE_BCS		0x22000
+
+#define _EL_OFFSET_SUBMITPORT	0x230
+#define _EL_OFFSET_STATUS	0x234
+#define _EL_OFFSET_SR_CTL	0x244
+#define _EL_OFFSET_STATUS_BUF	0x370
+#define _EL_OFFSET_STATUS_PTR	0x3A0
+
+#define _REG_RCS_EXECLIST_SUBMITPORT	0x02230
+#define _REG_VCS_EXECLIST_SUBMITPORT	0x12230
+#define _REG_VECS_EXECLIST_SUBMITPORT	0x1A230
+#define _REG_VCS2_EXECLIST_SUBMITPORT	0x1C230
+#define _REG_BCS_EXECLIST_SUBMITPORT	0x22230
+
+#define _EXECLIST_LRCA_MASK		0xfffff000
+
+#define _REG_RCS_EXECLIST_STATUS	0x02234
+#define _REG_VCS_EXECLIST_STATUS	0x12234
+#define _REG_VECS_EXECLIST_STATUS	0x1A234
+#define _REG_VCS2_EXECLIST_STATUS	0x1C234
+#define _REG_BCS_EXECLIST_STATUS	0x22234
+
+#define _REG_RCS_CTX_SR_CTL	0x02244
+#define _REG_VCS_CTX_SR_CTL	0x12244
+#define _REG_VECS_CTX_SR_CTL	0x1A244
+#define _REG_VCS2_CTX_SR_CTL	0x1C244
+#define _REG_BCS_CTX_SR_CTL	0x22244
+
+#define _REG_RCS_CTX_STATUS_BUF		0x02370
+#define _REG_VCS_CTX_STATUS_BUF		0x12370
+#define _REG_VECS_CTX_STATUS_BUF	0x1A370
+#define _REG_VCS2_CTX_STATUS_BUF	0x1C370
+#define _REG_BCS_CTX_STATUS_BUF		0x22370
+
+#define _REG_RCS_CTX_STATUS_PTR		0x023A0
+#define _REG_VCS_CTX_STATUS_PTR		0x123A0
+#define _REG_VECS_CTX_STATUS_PTR	0x1A3A0
+#define _REG_VCS2_CTX_STATUS_PTR	0x1C3A0
+#define _REG_BCS_CTX_STATUS_PTR		0x223A0
+
+#define _REG_CURASURFLIVE	0x700AC
+
+#define _REG_CURAPALET_0	0x70090
+#define _REG_CURAPALET_1	0x70094
+#define _REG_CURAPALET_2	0x70098
+#define _REG_CURAPALET_3	0x7009C
+
 #define	_PRI_PLANE_FMT_SHIFT	26
 #define	_PRI_PLANE_TILE_SHIFT	10
 
@@ -475,6 +576,80 @@ union _TRANS_CONFIG
 #define _GEN6_GT_THREAD_STATUS_REG	0x13805c
 #define _GEN6_GT_CORE_STATUS		0x138060
 
+#define _FORCEWAKE_MT			0xa188
+#define _FORCEWAKE_ACK_HSW		0x130044
+#define _SBI_ADDR			0xC6000
+#define _SBI_DATA			0xC6004
+#define _SBI_CTL_STAT			0xC6008
+
+#define _RING_IMR(base)			((base) + 0xa8)
+#define _SPLL_CTL			0x46020
+#define _SFUSE_STRAP			0xc2014
+#define _PIXCLK_GATE			0xC6020
+#define _ECOBUS				0xa180
+#define _GEN6_RC_CONTROL		0xA090
+#define _GEN6_RC_STATE			0xA094
+#define _GEN6_RPNSWREQ				(0xA008)
+#define _GEN6_RC_VIDEO_FREQ			(0xA00C)
+#define _GEN6_RP_DOWN_TIMEOUT			(0xA010)
+#define _GEN6_RP_INTERRUPT_LIMITS		(0xA014)
+#define _GEN6_RPSTAT1				(0xA01C)
+#define _GEN6_RP_CONTROL				(0xA024)
+#define _GEN6_RP_UP_THRESHOLD			(0xA02C)
+#define _GEN6_RP_DOWN_THRESHOLD			(0xA030)
+#define _GEN6_RP_CUR_UP_EI			(0xA050)
+#define _GEN6_RP_CUR_UP				(0xA054)
+#define _GEN6_RP_PREV_UP				(0xA058)
+#define _GEN6_RP_CUR_DOWN_EI			(0xA05C)
+#define _GEN6_RP_CUR_DOWN			(0xA060)
+#define _GEN6_RP_PREV_DOWN			(0xA064)
+#define _GEN6_RP_UP_EI				(0xA068)
+#define _GEN6_RP_DOWN_EI				(0xA06C)
+#define _GEN6_RP_IDLE_HYSTERSIS			(0xA070)
+#define _GEN6_RC1_WAKE_RATE_LIMIT		(0xA098)
+#define _GEN6_RC6_WAKE_RATE_LIMIT		(0xA09C)
+#define _GEN6_RC6pp_WAKE_RATE_LIMIT		(0xA0A0)
+#define _GEN6_RC_EVALUATION_INTERVAL		(0xA0A8)
+#define _GEN6_RC_IDLE_HYSTERSIS			(0xA0AC)
+#define _GEN6_RC_SLEEP				(0xA0B0)
+#define _GEN6_RC1e_THRESHOLD			(0xA0B4)
+#define _GEN6_RC6_THRESHOLD			(0xA0B8)
+#define _GEN6_RC6p_THRESHOLD			(0xA0BC)
+#define _GEN6_RC6pp_THRESHOLD			(0xA0C0)
+#define _GEN6_PMINTRMSK				(0xA168)
+#define _HSW_PWR_WELL_BIOS			(0x45400)
+#define _HSW_PWR_WELL_DRIVER			(0x45404)
+#define _HSW_PWR_WELL_KVMR			(0x45408)
+#define _HSW_PWR_WELL_DEBUG			(0x4540C)
+#define _HSW_PWR_WELL_CTL5			(0x45410)
+#define _HSW_PWR_WELL_CTL6			(0x45414)
+#define _CPU_VGACNTRL	(0x41000)
+#define _TILECTL				(0x101000)
+#define _GEN6_UCGCTL1				(0x9400)
+#define _GEN6_UCGCTL2				(0x9404)
+#define _GEN6_PCODE_MAILBOX			(0x138124)
+#define _GEN6_PCODE_DATA				(0x138128)
+#define _GEN7_ERR_INT	(0x44040)
+#define _GFX_FLSH_CNTL_GEN6	(0x101008)
+#define _ECOSKPD		(0x21d0)
+#define _GEN6_BLITTER_ECOSKPD	(0x221d0)
+#define _GAC_ECO_BITS			(0x14090)
+#define _GEN6_MBCTL		(0x0907c)
+#define _GAB_CTL				(0x24000)
+#define _FPGA_DBG		(0x42300)
+#define _BCS_SWCTRL (0x22200)
+#define _HS_INVOCATION_COUNT             (0x2300)
+#define _DS_INVOCATION_COUNT             (0x2308)
+#define _IA_VERTICES_COUNT               (0x2310)
+#define _IA_PRIMITIVES_COUNT             (0x2318)
+#define _VS_INVOCATION_COUNT             (0x2320)
+#define _GS_INVOCATION_COUNT             (0x2328)
+#define _GS_PRIMITIVES_COUNT             (0x2330)
+#define _CL_INVOCATION_COUNT             (0x2338)
+#define _CL_PRIMITIVES_COUNT             (0x2340)
+#define _PS_INVOCATION_COUNT             (0x2348)
+#define _PS_DEPTH_COUNT                  (0x2350)
+
 #define _GEN8_DE_PORT_IMR (0x44444)
 #define _GEN8_DE_PORT_IER (0x4444c)
 #define _GEN8_DE_PORT_IIR (0x44448)
@@ -491,10 +666,74 @@ union _TRANS_CONFIG
 #define _GEN8_PCU_ISR (0x444e0)
 #define _GEN8_MASTER_IRQ			(0x44200)
 
+#define _RING_HWSTAM(base)	((base)+0x98)
+#define _RING_TAIL(base)		((base)+0x30)
+#define _RING_HEAD(base)		((base)+0x34)
+#define _RING_START(base)	((base)+0x38)
+#define _RING_CTL(base)		((base)+0x3c)
+#define _RING_ACTHD(base)	((base)+0x74)
+#define _RING_MI_MODE(base)	((base)+0x9c)
+#define _RING_INSTPM(base)	((base)+0xc0)
+
+#define _GEN6_MBCUNIT_SNPCR	(0x900c)
+#define _GEN7_MISCCPCTL				(0x9424)
+#define _GEN8_PRIVATE_PAT_LO	(0x40e0)
+#define _GEN8_PRIVATE_PAT_HI	(0x40e0 + 4)
+#define _GAMTARBMODE		(0x04a08)
+
 #define _SDEIMR  (0xc4004)
 #define _SDEIER  (0xc400c)
 #define _SDEIIR  (0xc4008)
 #define _SDEISR  (0xc4000)
+
+#define _RENDER_HWS_PGA_GEN7	(0x04080)
+#define _BSD_HWS_PGA_GEN7	(0x04180)
+#define _BLT_HWS_PGA_GEN7	(0x04280)
+#define _VEBOX_HWS_PGA_GEN7	(0x04380)
+#define _RING_MI_MODE(base)	((base)+0x9c)
+#define _GEN7_GT_MODE	(0x7008)
+#define _CACHE_MODE_0_GEN7	(0x7000) /* IVB+ */
+#define _CACHE_MODE_1		(0x7004) /* IVB+ */
+#define _GAM_ECOCHK			(0x4090)
+#define _GEN7_COMMON_SLICE_CHICKEN1		(0x7010)
+#define _COMMON_SLICE_CHICKEN2			(0x7014)
+#define _VGA0	(0x6000)
+#define _VGA1	(0x6004)
+#define _VGA_PD	(0x6010)
+#define _DERRMR		(0x44050)
+#define _WM0_PIPEA_ILK		(0x45100)
+#define _WM0_PIPEB_ILK		(0x45104)
+#define _WM0_PIPEC_IVB		(0x45200)
+#define _WM1_LP_ILK		(0x45108)
+#define _WM2_LP_ILK		(0x4510c)
+#define _WM3_LP_ILK		(0x45110)
+#define _WM1S_LP_ILK		(0x45120)
+#define _WM2S_LP_IVB		(0x45124)
+#define _WM3S_LP_IVB		(0x45128)
+#define _BLC_PWM_CPU_CTL2	(0x48250)
+#define _BLC_PWM_CPU_CTL		(0x48254)
+#define _BLC_PWM_PCH_CTL1	(0xc8250)
+#define _BLC_PWM_PCH_CTL2	(0xc8254)
+#define _PCH_GPIOA               (0xc5010)
+#define _PCH_ADPA                (0xe1100)
+#define __3D_CHICKEN3		(0x2090)
+#define _PCH_LVDS	(0xe1180)
+#define _PCH_DREF_CONTROL        (0xC6200)
+#define _PCH_RAWCLK_FREQ         (0xc6204)
+#define _PCH_DPLL_SEL		(0xc7000)
+#define _PCH_PORT_HOTPLUG		(0xc4030)	/* SHOTPLUG_CTL */
+#define _LCPLL_CTL			(0x130040)
+#define _FUSE_STRAP			(0x42014)
+#define _DIGITAL_PORT_HOTPLUG_CNTRL	(0x44030)
+#define _DISP_ARB_CTL	(0x45000)
+#define _DISP_ARB_CTL2	(0x45004)
+#define _ILK_DISPLAY_CHICKEN1	(0x42000)
+#define _ILK_DISPLAY_CHICKEN2	(0x42004)
+#define _ILK_DSPCLK_GATE_D			(0x42020)
+#define _SOUTH_CHICKEN1		(0xc2000)
+#define _SOUTH_CHICKEN2		(0xc2004)
+#define _SOUTH_DSPCLK_GATE_D	(0xc2020)
+#define _IPS_CTL		(0x43408)
 
 #define _GEN8_GT_ISR(which) (0x44300 + (0x10 * (which)))
 #define _GEN8_GT_IMR(which) (0x44304 + (0x10 * (which)))
@@ -506,7 +745,142 @@ union _TRANS_CONFIG
 #define _GEN8_DE_PIPE_IIR(pipe) (0x44408 + (0x10 * (pipe)))
 #define _GEN8_DE_PIPE_IER(pipe) (0x4440c + (0x10 * (pipe)))
 
+/* digital port hotplug */
+/* GMBUS1 bits definitions */
+
+#define GMBUS1_TOTAL_BYTES_SHIFT 16
+#define GMBUS1_TOTAL_BYTES_MASK 0x1ff
+#define gmbus1_total_byte_count(v) (((v) >> GMBUS1_TOTAL_BYTES_SHIFT) & GMBUS1_TOTAL_BYTES_MASK)
+#define gmbus1_slave_addr(v) (((v) & 0xff) >> 1)
+#define gmbus1_slave_index(v) (((v) >> 8) & 0xff)
+#define gmbus1_bus_cycle(v) (((v) >> 25) & 0x7)
+
+/* GMBUS0 bits definitions */
+#define _GMBUS_PIN_SEL_MASK	(0x7)
+
+#define _REG_RC_PWRCTX_MAXCNT		0x2054
+#define _REG_VFSKPD			0x2470
+#define _REG_2D_CG_DIS			0x6200
+#define _REG_3D_CG_DIS			0x6204
+#define _REG_3D_CG_DIS2			0x6208
+#define _REG_SUPER_QUEUE_CONFIG		0x902c
+
+/* interrupt related definitions */
+#define	_REGSHIFT_MASTER_INTERRUPT	31
+#define	_REGSHIFT_PCH	21
+#define	_REGBIT_PCH	(1 << 21)
+/* GEN7 */
+#define	_REGSHIFT_PCH_GEN7	28
+#define	_REGBIT_PCH_GEN7	(1 << 28)
+
+#define	_REGBIT_DP_A_PULSE_DURATION	(3 << 2)
+
+#define	_REGBIT_CRT_HOTPLUG	(1 << 19)
+#define	_REGBIT_DP_B_HOTPLUG	(1 << 21)
+#define	_REGBIT_DP_C_HOTPLUG	(1 << 22)
+#define	_REGBIT_DP_D_HOTPLUG	(1 << 23)
+
+#define        _REGBIT_DP_B_STATUS			(3 << 0)
+#define        _REGBIT_DP_B_PULSE_DURATION		(3 << 2)
+#define        _REGBIT_DP_B_ENABLE			(1 << 4)
+#define        _REGBIT_DP_C_STATUS			(3 << 8)
+#define        _REGBIT_DP_C_PULSE_DURATION		(3 << 10)
+#define        _REGBIT_DP_C_ENABLE			(1 << 12)
+#define        _REGBIT_DP_D_STATUS			(3 << 16)
+#define        _REGBIT_DP_D_PULSE_DURATION		(3 << 18)
+#define        _REGBIT_DP_D_ENABLE			(1 << 20)
+
+#define _REG_RCS_WATCHDOG_CTL	0x2178
+#define _REG_RCS_WATCHDOG_THRSH	0x217C
+#define _REG_RCS_WATCHDOG_CTR	0x2190
+#define _REG_VCS_WATCHDOG_CTR	0x12178
+#define _REG_VCS_WATCHDOG_THRSH	0x1217C
+#define _REG_BCS_EIR	0x220B0
+#define _REG_BCS_EMR	0x220B4
+#define _REG_BCS_ESR	0x220B8
+#define _REG_VCS_EIR	0x120B0
+#define _REG_VCS_EMR	0x120B4
+#define _REG_VCS_ESR	0x120B8
+#define _REG_VECS_EIR	0x1A0B0
+#define _REG_VECS_EMR	0x1A0B4
+#define _REG_VECS_ESR	0x1A0B8
+
+/* blacklight PWM control */
+#define _REG_HISTOGRAM_THRSH	0x48268
+#define        _REGBIT_HISTOGRAM_IRQ_ENABLE	(1 << 31)
+#define        _REGBIT_HISTOGRAM_IRQ_STATUS	(1 << 30)
+
+/*
+ * Configuration register definition for BDF: 0:0:0.
+ */
+#define _REG_GMCH_CONTRL		0x50
+#define    _REGBIT_SNB_GMCH_GMS_SHIFT   3 /* Graphics Mode Select */
+#define    _REGBIT_SNB_GMCH_GMS_MASK    0x1f
+#define    _REGBIT_BDW_GMCH_GMS_SHIFT   8
+#define    _REGBIT_BDW_GMCH_GMS_MASK    0xff
+
+/* HSW */
+#define  _REGBIT_SPLL_CTL_ENABLE	(1 << 31)
+
+#define _REG_PORT_CLK_SEL_DDIC	0x46108
+#define _REG_PORT_CLK_SEL_DDID	0x4610C
+#define _REG_PORT_CLK_SEL_DDIE	0x46110
+
+#define _REG_TRANS_CLK_SEL_C	0x46148
+#define SBI_RESPONSE_MASK		0x3
+#define SBI_RESPONSE_SHIFT		0x1
+#define SBI_STAT_MASK			0x1
+#define SBI_STAT_SHIFT			0x0
+#define SBI_OPCODE_SHIFT		8
+#define SBI_OPCODE_MASK		(0xff << SBI_OPCODE_SHIFT)
+#define SBI_CMD_IORD			2
+#define SBI_CMD_IOWR			3
+#define SBI_CMD_CRRD			6
+#define SBI_CMD_CRWR			7
+#define SBI_ADDR_OFFSET_SHIFT		16
+#define SBI_ADDR_OFFSET_MASK		(0xffff << SBI_ADDR_OFFSET_SHIFT)
+
 #define _GVT_TRANS_DDI_FUNC_CTL(tran)   _TRANS(tran, _TRANS_DDI_FUNC_CTL_A, \
 		_TRANS_DDI_FUNC_CTL_B)
+
+/* Those bits are ignored by pipe EDP since it can only connect to DDI A */
+#define  _TRANS_DDI_MODE_SELECT_HIFT		24
+#define  _TRANS_DDI_EDP_INPUT_SHIFT		12
+
+#define _REG_GEN7_SQ_CHICKEN_MBCUNIT_CONFIG		0x9030
+
+#define _REG_PIPE_WM_LINETIME_C			0x45278
+
+#define _REG_HSW_VIDEO_DIP_CTL_C		0x62200
+#define _REG_HSW_VIDEO_DIP_CTL_EDP		0x6F200
+
+/* GEN8 interrupt registers definations */
+#define _REG_GT_ISR(which) (0x44300 + (0x10 * (which)))
+#define _REG_GT_IMR(which) (0x44304 + (0x10 * (which)))
+#define _REG_GT_IIR(which) (0x44308 + (0x10 * (which)))
+#define _REG_GT_IER(which) (0x4430c + (0x10 * (which)))
+
+#define _REG_DE_PIPE_ISR(pipe) (0x44400 + (0x10 * (pipe)))
+#define _REG_DE_PIPE_IMR(pipe) (0x44404 + (0x10 * (pipe)))
+#define _REG_DE_PIPE_IIR(pipe) (0x44408 + (0x10 * (pipe)))
+#define _REG_DE_PIPE_IER(pipe) (0x4440c + (0x10 * (pipe)))
+
+#define _REG_RING_PDP_UDW(base, n)      (base + 0x270 + ((n) * 8 + 4))
+#define _REG_RING_PDP_LDW(base, n)      (base + 0x270 + (n) * 8)
+
+#define _REG_RCS_PDP_UDW(n)	_REG_RING_PDP_UDW(0x2000, n)
+#define _REG_RCS_PDP_LDW(n)	_REG_RING_PDP_LDW(0x2000, n)
+
+#define _REG_VCS_PDP_UDW(n)	_REG_RING_PDP_UDW(0x12000, n)
+#define _REG_VCS_PDP_LDW(n)	_REG_RING_PDP_LDW(0x12000, n)
+
+#define _REG_VCS2_PDP_UDW(n)	_REG_RING_PDP_UDW(0x1c000, n)
+#define _REG_VCS2_PDP_LDW(n)	_REG_RING_PDP_LDW(0x1c000, n)
+
+#define _REG_VECS_PDP_UDW(n)	_REG_RING_PDP_UDW(0x1a000, n)
+#define _REG_VECS_PDP_LDW(n)	_REG_RING_PDP_LDW(0x1a000, n)
+
+#define _REG_BCS_PDP_UDW(n)	_REG_RING_PDP_UDW(0x22000, n)
+#define _REG_BCS_PDP_LDW(n)	_REG_RING_PDP_LDW(0x22000, n)
 
 #endif

@@ -169,6 +169,11 @@ static void clean_initial_mmio_state(struct pgt_device *pdev)
 		iounmap(pdev->gmadr_va);
 		pdev->gmadr_va = NULL;
 	}
+
+	if(pdev->reg_info) {
+		vfree(pdev->reg_info);
+		pdev->reg_info = NULL;
+	}
 }
 
 static bool init_initial_mmio_state(struct pgt_device *pdev)
@@ -194,6 +199,12 @@ static bool init_initial_mmio_state(struct pgt_device *pdev)
 	pdev->gmadr_va = ioremap(pdev->gmadr_base, pdev->bar_size[2]);
 	if (!pdev->gmadr_va) {
 		gvt_err("fail to map GMADR BAR.");
+		goto err;
+	}
+
+	pdev->reg_info = vzalloc(pdev->reg_num * sizeof(u32));
+	if (!pdev->reg_info) {
+		printk("vGT: failed to allocate reg_info\n");
 		goto err;
 	}
 
@@ -225,6 +236,12 @@ static int gvt_service_thread(void *data)
 
 		if (kthread_should_stop())
 			break;
+
+		if (test_and_clear_bit(GVT_REQUEST_UEVENT,
+					(void *)&pdev->service_request)) {
+			gvt_dpy_ready_uevent_handler(pdev);
+		}
+
 
 		if (r) {
 			gvt_warn("service thread is waken up by unexpected signal.");
@@ -340,7 +357,6 @@ static struct pgt_device *alloc_pgt_device(struct drm_i915_private *dev_priv)
 	mutex_init(&pdev->lock);
 	pdev->dev_priv = dev_priv;
 	idr_init(&pdev->instance_idr);
-
 	return pdev;
 err:
 	free_pgt_device(pdev);

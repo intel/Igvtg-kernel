@@ -48,6 +48,18 @@
 
 #define GVT_AUX_TABLE_NUM	256
 
+#define F_VIRT			GVT_REG_VIRT
+
+#define F_DOM0			F_VIRT
+#define F_RDR			F_VIRT
+#define F_RDR_ADRFIX		F_VIRT
+#define F_RDR_HWSTS		F_VIRT
+#define F_RDR_MODE		F_VIRT
+#define F_DPY			F_VIRT
+#define F_DPY_ADRFIX		F_VIRT
+#define F_DPY_HWSTS_ADRFIX	F_VIRT
+#define F_PT			F_VIRT
+
 /* suppose a reg won't set both bits */
 typedef union {
 	struct {
@@ -81,11 +93,13 @@ struct gvt_reg_info {
 	gvt_mmio_handler_t write;
 };
 
+struct pgt_device;
+
 extern struct gvt_reg_info gvt_general_reg_info[];
 extern struct gvt_reg_info gvt_broadwell_reg_info[];
 extern int gvt_get_reg_num(int type);
+extern unsigned int gvt_get_device_type(struct pgt_device *pdev);
 
 bool gvt_emulate_mmio_read(struct vgt_device *vgt, uint64_t pa, void *p_data,int bytes);
 bool gvt_emulate_mmio_write(struct vgt_device *vgt, uint64_t pa, void *p_data,int bytes);
-
 #endif

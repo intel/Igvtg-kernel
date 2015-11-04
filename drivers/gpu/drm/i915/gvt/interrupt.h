@@ -229,4 +229,18 @@ struct gvt_irq_state {
 bool gvt_irq_init(struct pgt_device *pdev);
 void gvt_irq_exit(struct pgt_device *pdev);
 
+bool gvt_reg_imr_handler(struct vgt_device *vgt,
+	unsigned int reg, void *p_data, unsigned int bytes);
+bool gvt_reg_ier_handler(struct vgt_device *vgt,
+	unsigned int reg, void *p_data, unsigned int bytes);
+bool gvt_reg_iir_handler(struct vgt_device *vgt, unsigned int reg,
+	void *p_data, unsigned int bytes);
+bool gvt_reg_isr_write(struct vgt_device *vgt, unsigned int reg,
+	void *p_data, unsigned int bytes);
+bool gvt_reg_master_irq_handler(struct vgt_device *vgt,
+	unsigned int reg, void *p_data, unsigned int bytes);
+void gvt_trigger_virtual_event(struct vgt_device *vgt,
+	enum gvt_event_type event);
+void gvt_inject_flip_done(struct vgt_device *vgt, int pipe);
+
 #endif /* _GVT_INTERRUPT_H_ */

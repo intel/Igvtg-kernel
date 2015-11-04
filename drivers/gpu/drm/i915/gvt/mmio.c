@@ -23,7 +23,7 @@
 
 #include "gvt.h"
 
-static inline unsigned int get_device_type(struct pgt_device *pdev)
+unsigned int gvt_get_device_type(struct pgt_device *pdev)
 {
 	if (IS_BROADWELL(pdev->dev_priv))
 		return D_BDW;
@@ -32,7 +32,7 @@ static inline unsigned int get_device_type(struct pgt_device *pdev)
 
 static inline bool match_device(struct pgt_device *pdev, struct gvt_reg_info *info)
 {
-	return info->device & get_device_type(pdev);
+	return info->device & gvt_get_device_type(pdev);
 }
 
 static void save_initial_mmio_state(struct pgt_device *pdev,
@@ -513,4 +513,33 @@ err:
                        vgt->id, offset, bytes);
        mutex_unlock(&pdev->lock);
        return false;
+}
+
+static unsigned long ring_mmio_base[] = {
+	[RCS] = RENDER_RING_BASE,
+	[BCS] = BLT_RING_BASE,
+	[VCS] = GEN6_BSD_RING_BASE,
+	[VECS] = VEBOX_RING_BASE,
+	[VCS2] = GEN8_BSD2_RING_BASE,
+};
+
+int gvt_render_mmio_to_ring_id(unsigned int reg)
+{
+	int i;
+
+	reg &= ~0xfff;
+
+	for (i = 0; i < ARRAY_SIZE(ring_mmio_base); i++) {
+		if (ring_mmio_base[i] == reg)
+			return i;
+	}
+
+	ASSERT(0);
+	return -1;
+}
+
+int gvt_ring_id_to_render_mmio_base(int ring_id)
+{
+	ASSERT(ring_id >= 0 && ring_id < (ARRAY_SIZE(ring_mmio_base)));
+	return ring_mmio_base[ring_id];
 }

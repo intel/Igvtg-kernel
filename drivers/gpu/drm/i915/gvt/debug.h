@@ -40,6 +40,19 @@
                 }                                                       \
         } while (0);
 
+#define ASSERT_VM(x, vgt)                                              \
+        do {                                                            \
+                if (!(x)) {                                             \
+                        printk("Assert at %s line %d\n",                \
+                                        __FILE__, __LINE__);                    \
+                        if (atomic_cmpxchg(&(vgt)->crashing, 0, 1))     \
+                        break;                                  \
+                        gvt_warn("Killing VM%d", (vgt)->vm_id);       \
+                        if (!hypervisor_pause_domain((vgt)))            \
+                        hypervisor_shutdown_domain((vgt));      \
+                }                                                       \
+        } while (0)
+
 #define gvt_info(fmt, args...) \
 	printk(KERN_INFO"[GVT-g] "fmt"\n", ##args)
 
@@ -58,6 +71,9 @@ enum {
 	GVT_DBG_CORE = (1 << 0),
 	GVT_DBG_MM = (1 << 1),
 	GVT_DBG_IRQ = (1 << 2),
+	GVT_DBG_DPY = (1 << 3),
+	GVT_DBG_RENDER = (1 << 4),
+	GVT_DBG_EDID = (1 << 5)
 };
 
 #define gvt_dbg_core(fmt, args...) \

@@ -28,6 +28,7 @@
 #include "i915_vgpu.h"
 
 #include "debug.h"
+
 #include "params.h"
 #include "reg.h"
 #include "hypercall.h"
@@ -129,18 +130,23 @@ struct gvt_virtual_device_state {
 	struct gvt_virtual_opregion_state opregion;
 };
 
+struct gvt_uevent {
+	int vm_id;
+};
+
 struct vgt_device {
 	int id;
 	int vm_id;
 	struct pgt_device *pdev;
-	bool warn_untrack;
 	atomic_t active;
 	struct gvt_virtual_device_state state;
 	struct gvt_statistics stat;
 	struct gvt_vgtt_info gtt;
 	void *hypervisor_data;
 	unsigned long low_mem_max_gpfn;
+	unsigned long last_reset_time;
 	atomic_t crashing;
+	bool warn_untrack;
 };
 
 struct gvt_gm_allocator {
@@ -156,6 +162,7 @@ struct pgt_device {
 	struct idr instance_idr;
 
 	struct gvt_device_info device_info;
+	struct gvt_uevent       uevent;
 
 	u8 initial_cfg_space[GVT_CFG_SPACE_SZ];
 	u64 bar_size[GVT_BAR_NUM];
@@ -199,6 +206,32 @@ struct pgt_device {
 
 	struct gvt_gtt_info gtt;
 };
+
+/* request types to wake up main thread */
+#define GVT_REQUEST_IRQ                        0       /* a new irq pending from device */
+#define GVT_REQUEST_UEVENT             1
+#define GVT_REQUEST_CTX_SWITCH         2       /* immediate reschedule(context switch) requested */
+#define GVT_REQUEST_EMUL_DPY_EVENTS    3
+#define GVT_REQUEST_DEVICE_RESET       4
+#define GVT_REQUEST_SCHED              5
+#define GVT_REQUEST_CTX_EMULATION_RCS  6 /* Emulate context switch irq of Gen8 */
+#define GVT_REQUEST_CTX_EMULATION_VCS  7 /* Emulate context switch irq of Gen8 */
+#define GVT_REQUEST_CTX_EMULATION_BCS  8 /* Emulate context switch irq of Gen8 */
+#define GVT_REQUEST_CTX_EMULATION_VECS 9 /* Emulate context switch irq of Gen8 */
+#define GVT_REQUEST_CTX_EMULATION_VCS2 10 /* Emulate context switch irq of Gen8 */
+
+static inline void gvt_raise_request(struct pgt_device *pdev, uint32_t flag)
+{
+       set_bit(flag, (void *)&pdev->service_request);
+       if (waitqueue_active(&pdev->service_thread_wq))
+               wake_up(&pdev->service_thread_wq);
+}
+
+static inline bool vgt_chk_raised_request(struct pgt_device *pdev, uint32_t flag)
+{
+       return !!(test_bit(flag, (void *)&pdev->service_request));
+}
+
 
 /* definitions for physical aperture/GM space */
 #define phys_aperture_sz(pdev)          (pdev->bar_size[1])
@@ -266,22 +299,12 @@ extern void gvt_free_gm_and_fence_resource(struct vgt_device *vgt);
 
 #define REG_INDEX(reg) ((reg) >> 2)
 
-#define D_SNB   (1 << 0)
-#define D_IVB   (1 << 1)
-#define D_HSW   (1 << 2)
-#define D_BDW   (1 << 3)
+#define D_HSW	(1 << 0)
+#define D_BDW	(1 << 1)
 
 #define D_GEN8PLUS      (D_BDW)
-#define D_GEN75PLUS     (D_HSW | D_BDW)
-#define D_GEN7PLUS      (D_IVB | D_HSW | D_BDW)
-
 #define D_BDW_PLUS      (D_BDW)
-#define D_HSW_PLUS      (D_HSW | D_BDW)
-#define D_IVB_PLUS      (D_IVB | D_HSW | D_BDW)
-
-#define D_PRE_BDW       (D_SNB | D_IVB | D_HSW)
-
-#define D_ALL           (D_SNB | D_IVB | D_HSW | D_BDW)
+#define D_ALL           (D_HSW | D_BDW)
 
 #define reg_addr_fix(pdev, reg)		(pdev->reg_info[REG_INDEX(reg)] & GVT_REG_ADDR_FIX)
 #define reg_hw_status(pdev, reg)	(pdev->reg_info[REG_INDEX(reg)] & GVT_REG_HW_STATUS)
@@ -419,6 +442,29 @@ static inline void gvt_mmio_posting_read(struct pgt_device *pdev, u32 reg)
 	struct drm_i915_private *dev_priv = pdev->dev_priv;
 	i915_reg_t tmp = {.reg = reg};
 	POSTING_READ(tmp);
+}
+
+static inline void  gvt_set_dpy_uevent(struct vgt_device *vgt)
+{
+	struct gvt_uevent *event =  &vgt->pdev->uevent;
+
+	event->vm_id = vgt->vm_id;
+}
+
+static inline bool gvt_dpy_ready_uevent_handler(struct pgt_device *pdev)
+{
+	int retval;
+	struct kobject *kobj = &(pdev->dev_priv->dev->primary->kdev->kobj);
+	char *env[3] = {"VGT_DISPLAY_READY=1", NULL, NULL};
+	char vmid_str[20];
+	snprintf(vmid_str, 20, "VMID=%d", pdev->uevent.vm_id);
+	env[1] = vmid_str;
+
+	retval = kobject_uevent_env(kobj, KOBJ_ADD, env);
+	if (retval == 0)
+		return true;
+	else
+		return false;
 }
 
 extern void gvt_clean_initial_mmio_state(struct pgt_device *pdev);
@@ -618,8 +664,17 @@ static inline u32 h2g_gtt_index(struct vgt_device *vgt, uint32_t h_index)
 /* get one bit of the data, bit is starting from zeor */
 #define GVT_GET_BIT(data, bit)          GVT_GET_BITS(data, bit, bit)
 
+int gvt_render_mmio_to_ring_id(unsigned int reg);
+int gvt_ring_id_to_render_mmio_base(int ring_id);
+
 int gvt_hvm_map_aperture(struct vgt_device *vgt, int map);
 int gvt_hvm_set_trap_area(struct vgt_device *vgt, int map);
+
+bool gvt_default_mmio_read(struct vgt_device *vgt, unsigned int offset, void *p_data, unsigned int bytes);
+bool gvt_default_mmio_write(struct vgt_device *vgt, unsigned int offset, void *p_data, unsigned int bytes);
+
+bool register_mmio_handler(struct pgt_device *pdev, unsigned int start, int bytes,
+	gvt_mmio_handler_t read, gvt_mmio_handler_t write);
 
 #include "mpt.h"
 
