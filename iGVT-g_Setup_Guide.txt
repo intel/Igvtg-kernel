@@ -119,13 +119,13 @@ Contents
 	# git checkout 2015q3-3.18.0
 	# cp config-3.18.0-host .config
 	# make -j8 && make modules_install
-	# mkinitramfs -o /boot/initrd.img -v `ls /lib/modules | grep 3.18.0`
+	# mkinitramfs -o /boot/initrd.img -v 3.18.0-rc7-vgt-2015q3+
 	# cp arch/x86/boot/bzImage /boot/vmlinuz-3.18.0
 	# cp vgt.rules /etc/udev/rules.d
 	# chmod a+x vgt_mgr
 	# cp vgt_mgr /usr/bin
 
-   Note, the above listed module name '3.18.0' matches the one under
+   Note, the above listed module name '3.18.0-rc7-vgt-2015q3+' matches the one under
    /lib/modules/ directory.
 
 
@@ -154,8 +154,7 @@ Contents
 	# cd xen_src/
 	# git clone https://github.com/01org/igvtg-qemu.git -b xengt_public2015q3 qemu-xen
 	# cp -r qemu-xen/ tools/
-	# cd ..
-	# sed -i '/QEMU_UPSTREAM_URL/s:http\://xenbits.xen.org/git-http/qemu-upstream-4.5-testing.git:$(XEN_ROOT)/tools/qemu-xen:'Config.mk
+	# sed -i '/QEMU_UPSTREAM_URL/s:http\://xenbits.xen.org/git-http/qemu-upstream-4.5-testing.git:$(XEN_ROOT)/tools/qemu-xen:' Config.mk
 	# sed -i '/QEMU_UPSTREAM_URL/s:git\://xenbits.xen.org/qemu-upstream-4.5-testing.git:$(XEN_ROOT)/tools/qemu-xen:' Config.mk
 	# ./autogen.sh
 	# ./configure --prefix=/usr  # XEN4.5 changes the default path to /usr/local
