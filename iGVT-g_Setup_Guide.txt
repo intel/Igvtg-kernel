@@ -137,10 +137,11 @@ Contents
 	# cd qemu_src/
 	# git submodule update --init dtc
 	# git submodule update --init roms/seabios
-	# ./configure -prefix=/usr \
+	# ./configure --prefix=/usr \
 			--enable-kvm \
 			--enable-sdl \
-			--target-list=x86_64-softmmu
+			--target-list=x86_64-softmmu \
+			--extra-cflags="-Wno-unused-result"
 	# make -j8
 	# cd roms/seabios
 	# LC_ALL=C make -j8
