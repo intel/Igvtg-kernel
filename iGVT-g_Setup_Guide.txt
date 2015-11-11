@@ -133,19 +133,20 @@ Contents
 
 3.3.1 For KVMGT
 
-	# git clone https://github.com/01org/ igvtg-qemu -b kvmgt_public2015q3 qemu_src
+	# git clone https://github.com/01org/igvtg-qemu -b kvmgt_public2015q3 qemu_src
 	# cd qemu_src/
 	# git submodule update --init dtc
 	# git submodule update --init roms/seabios
-	# ./configure -prefix=/usr \
+	# ./configure --prefix=/usr \
 			--enable-kvm \
 			--enable-sdl \
+			--disable-werror \
 			--target-list=x86_64-softmmu
 	# make -j8
 	# cd roms/seabios
 	# LC_ALL=C make -j8
 	# cd -
-	# ln -sf `pwd`/x86_64-softmmu/qemu-system-x86_64 /usr/bin/qemu-system-x86-64
+	# ln -sf `pwd`/x86_64-softmmu/qemu-system-x86_64 /usr/bin/qemu-system-x86_64
 	# ln -sf `pwd`/roms/seabios/out/bios.bin /usr/bin/bios.bin
 
 3.3.2 For XenGT
@@ -185,7 +186,7 @@ Contents
 	    insmod ext2
 	    set root='(hd0,msdos1)'
 	    search --no-floppy --fs-uuid --set=root 2e01a442-d848-4695-b031-9296ce3105b1
-	    linux   /boot/vmlinuz-3.18.0 root=UUID=2e01a442-d848-4695-b031-9296ce3105b1 intel_iommu=igfx_off loglvl=all guest_loglvl=all conring_size=4M noreboot
+	    linux   /boot/vmlinuz-3.18.0 root=UUID=2e01a442-d848-4695-b031-9296ce3105b1 intel_iommu=igfx_off i915.hvm_boot_foreground=1 loglvl=all guest_loglvl=all conring_size=4M noreboot
 	initrd  /boot/initrd.img
 	}
 
@@ -276,6 +277,7 @@ Contents
    Assume that you have an Ubuntu x86_64 14.04 image. You could update the
    kernel and user mode drivers in guest image with following commands:
 
+	# modprobe loop
 	# kpartx -a -v /path/to/ubuntu14.04.img
 
    The output will be something like below:
@@ -395,7 +397,7 @@ Contents
 	-hda /path/to/Guest_OS.img \
 	-net nic -net tap,script=/path/to/qemu-ifup \
 	-vgt -vga vgt -vgt_low_gm_sz 128 \
-	-vgt_high_gm_sz 256 -vgt_fence_sz 4
+	-vgt_high_gm_sz 384 -vgt_fence_sz 4
 
 
    The description of the KVMGT-specific parameters(Don't set them before you
@@ -415,6 +417,23 @@ Contents
 	| -vgt_fence_sz        | The number of the fence registers, default is 4 |
 	+----------------------+-------------------------------------------------+
 
+    Note:
+	You need create qemu-ifup file in the /path/to/qemu-ifup.
+	add below info to /path/to/qemu-ifup
+	#!/bin/bash
+
+        switch=$(brctl show| sed -n 2p |awk '{print $1}')
+
+        if [ -n $switch ];then
+                tunctl -u `whoami` -t $1
+                ip link set $1 up
+                /sbin/ifconfig $1 0.0.0.0 up
+                brctl addif $switch $1
+                exit 0
+        else
+                echo Error: no interface specified
+                exit 1
+        fi
 
 4.1.3 Indirect Display Mode
 
