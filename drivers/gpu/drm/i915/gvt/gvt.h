@@ -163,6 +163,10 @@ struct gvt_gm_allocator {
 	struct drm_mm high_gm;
 };
 
+struct gvt_device_control {
+	struct miscdevice misc_device;
+};
+
 struct pgt_device {
 	struct mutex lock;
 	int id;
@@ -214,6 +218,7 @@ struct pgt_device {
 	struct pgt_statistics stat;
 
 	struct gvt_gtt_info gtt;
+	struct gvt_device_control control;
 };
 
 /* request types to wake up main thread */
@@ -687,6 +692,9 @@ bool register_mmio_handler(struct pgt_device *pdev, unsigned int start, int byte
 
 bool gvt_update_display_events_emulation(struct pgt_device *pdev);
 void gvt_emulate_display_events(struct pgt_device *pdev);
+
+bool gvt_setup_control_interface(struct pgt_device *pdev);
+void gvt_clean_control_interface(struct pgt_device *pdev);
 
 #include "mpt.h"
 
