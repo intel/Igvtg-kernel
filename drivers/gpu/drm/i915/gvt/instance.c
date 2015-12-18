@@ -183,6 +183,8 @@ static bool create_virtual_device_state(struct vgt_device *vgt,
 	if (!gvt_init_virtual_display_state(vgt))
 		return false;
 
+	gvt_init_virtual_execlist_info(vgt);
+
 	return true;
 }
 

@@ -42,6 +42,7 @@
 #include "fb_decoder.h"
 #include "edid.h"
 #include "display.h"
+#include "execlist.h"
 
 #define GVT_MAX_VGPU 8
 
@@ -149,6 +150,7 @@ struct vgt_device {
 	struct pgt_device *pdev;
 	atomic_t active;
 	struct gvt_virtual_device_state state;
+	struct gvt_virtual_execlist_info virtual_execlist_info[I915_NUM_RINGS];
 	struct gvt_statistics stat;
 	struct gvt_vgtt_info gtt;
 	void *hypervisor_data;

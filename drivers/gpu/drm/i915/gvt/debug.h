@@ -73,7 +73,8 @@ enum {
 	GVT_DBG_IRQ = (1 << 2),
 	GVT_DBG_DPY = (1 << 3),
 	GVT_DBG_RENDER = (1 << 4),
-	GVT_DBG_EDID = (1 << 5)
+	GVT_DBG_EDID = (1 << 5),
+	GVT_DBG_EL = (1 << 6),
 };
 
 #define gvt_dbg_core(fmt, args...) \
@@ -84,5 +85,8 @@ enum {
 
 #define gvt_dbg_irq(fmt, args...) \
 	gvt_dbg(GVT_DBG_IRQ, fmt, ##args)
+
+#define gvt_dbg_el(fmt, args...) \
+	gvt_dbg(GVT_DBG_EL, fmt, ##args)
 
 #endif
