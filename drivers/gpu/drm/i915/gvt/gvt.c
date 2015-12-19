@@ -283,6 +283,7 @@ static bool init_service_thread(struct pgt_device *pdev)
 static void clean_pgt_device(struct pgt_device *pdev)
 {
 	clean_service_thread(pdev);
+	gvt_clean_workload_scheduler(pdev);
 	gvt_clean_control_interface(pdev);
 	gvt_clean_gtt(pdev);
 	gvt_irq_exit(pdev);
@@ -330,6 +331,9 @@ err:
 
 static bool post_init_pgt_device(struct pgt_device *pdev)
 {
+	if (!gvt_init_workload_scheduler(pdev))
+		return false;
+
 	return true;
 }
 

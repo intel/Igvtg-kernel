@@ -223,6 +223,8 @@ struct pgt_device {
 
 	struct gvt_gtt_info gtt;
 	struct gvt_device_control control;
+
+	struct gvt_workload_scheduler workload_scheduler;
 };
 
 /* request types to wake up main thread */
