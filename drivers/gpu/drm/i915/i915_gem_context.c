@@ -260,6 +260,44 @@ err_out:
 	return ERR_PTR(ret);
 }
 
+struct intel_context *
+i915_gem_create_gvt_context(struct drm_device *dev)
+{
+	struct drm_i915_private *dev_priv = dev->dev_private;
+	struct intel_context *ctx;
+	int ret;
+	int i;
+
+	mutex_lock(&dev->struct_mutex);
+
+	ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
+	if (ctx == NULL)
+		return ERR_PTR(-ENOMEM);
+
+	kref_init(&ctx->ref);
+	list_add_tail(&ctx->link, &dev_priv->context_list);
+
+	ctx->i915 = dev_priv;
+	ctx->file_priv = NULL;
+	ctx->user_handle = -1;
+	ctx->remap_slice = (1 << NUM_L3_SLICES(dev)) - 1;
+	ctx->hang_stats.ban_period_seconds = DRM_I915_CTX_BAN_PERIOD;
+
+	ctx->gvt_context = true;
+
+	for (i = 0; i < I915_NUM_RINGS; i++) {
+		ret = intel_lr_context_deferred_alloc(ctx, &dev_priv->ring[i]);
+		if (ret) {
+			i915_gem_context_unreference(ctx);
+			ctx = NULL;
+			goto out;
+		}
+	}
+out:
+	mutex_unlock(&dev->struct_mutex);
+	return ctx;
+}
+
 /**
  * The default context needs to exist per ring that uses contexts. It stores the
  * context state of the GPU for applications that don't utilize HW contexts, as

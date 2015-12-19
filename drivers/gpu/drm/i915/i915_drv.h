@@ -890,6 +890,24 @@ struct intel_context {
 	} engine[I915_NUM_RINGS];
 
 	struct list_head link;
+
+	/* Is a GVT context ? */
+	bool gvt_context;
+	/* Used by GVT workload scheduler. */
+	void *gvt_context_private_data[I915_NUM_RINGS];
+	/*
+	 * As GVT context may comes from different guest,
+	 * the addressing mode may be different
+	 */
+	u32 gvt_context_addressing_mode[I915_NUM_RINGS];
+	/*
+	 * Called when GVT context is scheduled-in
+	 */
+	void (*gvt_context_schedule_in)(void *data);
+	/*
+	 * Called when GVT context is scheduled-out
+	 */
+	void (*gvt_context_schedule_out)(void *data);
 };
 
 enum fb_op_origin {
@@ -2865,6 +2883,8 @@ struct drm_i915_gem_object *i915_gem_object_create_from_data(
 		struct drm_device *dev, const void *data, size_t size);
 void i915_gem_free_object(struct drm_gem_object *obj);
 void i915_gem_vma_destroy(struct i915_vma *vma);
+
+struct intel_context * i915_gem_create_gvt_context(struct drm_device *dev);
 
 /* Flags used by pin/bind&friends. */
 #define PIN_MAPPABLE	(1<<0)
