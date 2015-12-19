@@ -43,6 +43,7 @@
 #include "edid.h"
 #include "display.h"
 #include "execlist.h"
+#include "scheduler.h"
 
 #define GVT_MAX_VGPU 8
 
@@ -151,6 +152,7 @@ struct vgt_device {
 	atomic_t active;
 	struct gvt_virtual_device_state state;
 	struct gvt_virtual_execlist_info virtual_execlist_info[I915_NUM_RINGS];
+	atomic_t running_workload_num;
 	struct gvt_statistics stat;
 	struct gvt_vgtt_info gtt;
 	void *hypervisor_data;
@@ -697,6 +699,8 @@ void gvt_emulate_display_events(struct pgt_device *pdev);
 
 bool gvt_setup_control_interface(struct pgt_device *pdev);
 void gvt_clean_control_interface(struct pgt_device *pdev);
+
+bool gvt_execlist_elsp_submit(struct vgt_device *vgt, int ring_id);
 
 #include "mpt.h"
 

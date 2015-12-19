@@ -312,6 +312,266 @@ static bool emulate_execlist_schedule_in(struct gvt_virtual_execlist_info *info,
 	return true;
 }
 
+static bool execlist_workload_complete(struct gvt_workload *workload)
+{
+	struct vgt_device *vgt = workload->vgt;
+	struct gvt_virtual_execlist_info *info =
+		&vgt->virtual_execlist_info[workload->ring_id];
+	struct gvt_workload *next_workload;
+	struct list_head *next = workload_q_head(vgt, workload->ring_id);
+	bool lite_restore = false;
+
+	gvt_dbg_el("complete workload %p status %d", workload, workload->status);
+
+	if (workload->status)
+		goto out;
+
+	if (!list_empty(workload_q_head(vgt, workload->ring_id))) {
+		struct execlist_ctx_descriptor_format *this_desc, *next_desc;
+
+		next_workload = container_of(next, struct gvt_workload, list);
+		this_desc = &workload->ctx_desc;
+		next_desc = &next_workload->ctx_desc;
+
+		lite_restore = same_context(this_desc, next_desc);
+	}
+
+	if (lite_restore) {
+		gvt_dbg_el("next workload context is same as current - no schedule-out");
+		goto out;
+	}
+
+	if (!emulate_execlist_ctx_schedule_out(info, &workload->ctx_desc)) {
+		kfree(workload);
+		return false;
+	}
+
+out:
+	gvt_destroy_mm(workload->shadow_mm);
+	kfree(workload);
+	return true;
+}
+
+void gvt_get_context_pdp_root_pointer(struct vgt_device *vgt,
+		struct execlist_ring_context *ring_context,
+		u32 pdp[8])
+{
+	struct gvt_execlist_mmio_pair *pdp_pair = &ring_context->pdp3_UDW;
+	u32 v;
+	int i;
+
+	for (i = 0; i < 8; i++) {
+		hypervisor_read_va(vgt, &pdp_pair[i].val, &v, 4, 1);
+		pdp[7 - i] = v;
+	}
+}
+
+void gvt_set_context_pdp_root_pointer(struct vgt_device *vgt,
+		struct execlist_ring_context *ring_context,
+		u32 pdp[8])
+{
+	struct gvt_execlist_mmio_pair *pdp_pair = &ring_context->pdp3_UDW;
+	int i;
+
+	for (i = 0; i < 8; i++)
+		pdp_pair[i].val = pdp[7 - i];
+}
+
+static struct execlist_ring_context *get_ring_context(struct vgt_device *vgt,
+		u32 lrca)
+{
+	struct execlist_ring_context *context;
+	u32 gma = (lrca + 1) << GTT_PAGE_SHIFT;
+
+	context = (struct execlist_ring_context *)
+		gvt_gma_to_va(vgt->gtt.ggtt_mm, gma);
+
+	return context;
+}
+
+static bool prepare_workload(struct gvt_workload *workload)
+{
+	struct execlist_ctx_descriptor_format *desc = &workload->ctx_desc;
+	struct gvt_mm *mm;
+	gtt_type_t root_entry_type;
+	int page_table_level;
+	u32 pdp[8];
+
+	if (desc->addressing_mode == 1) { /* legacy 32-bit */
+		page_table_level = 3;
+		root_entry_type = GTT_TYPE_PPGTT_ROOT_L3_ENTRY;
+	} else if (desc->addressing_mode == 3) { /* legacy 64 bit */
+		page_table_level = 4;
+		root_entry_type = GTT_TYPE_PPGTT_ROOT_L4_ENTRY;
+	} else {
+		gvt_err("Advanced Context mode(SVM) is not supported!\n");
+		return false;
+	}
+
+	gvt_get_context_pdp_root_pointer(workload->vgt, workload->ring_context, pdp);
+
+	mm = gvt_create_mm(workload->vgt, GVT_MM_PPGTT, root_entry_type,
+			pdp, page_table_level, 0);
+	if (!mm) {
+		gvt_err("fail to create mm object.\n");
+		return false;
+	}
+
+	workload->shadow_mm = mm;
+
+	return true;
+}
+
+bool submit_context(struct vgt_device *vgt, int ring_id,
+		struct execlist_ctx_descriptor_format *desc)
+{
+	struct list_head *q = workload_q_head(vgt, ring_id);
+	struct gvt_workload *last_workload = list_empty(q) ? NULL :
+			container_of(q->prev, struct gvt_workload, list);
+	struct gvt_workload *workload = NULL;
+
+	struct execlist_ring_context *ring_context = get_ring_context(
+			vgt, desc->lrca);
+
+	u32 head, tail, start, ctl;
+
+	if (!ring_context) {
+		gvt_err("invalid guest context LRCA: %x", desc->lrca);
+		return false;
+	}
+
+	hypervisor_read_va(vgt, &ring_context->ring_header.val,
+			&head, 4, 1);
+
+	hypervisor_read_va(vgt, &ring_context->ring_tail.val,
+			&tail, 4, 1);
+
+	head &= RB_HEAD_OFF_MASK;
+	tail &= RB_TAIL_OFF_MASK;
+
+	if (last_workload && same_context(&last_workload->ctx_desc, desc)) {
+		gvt_dbg_el("ring id %d same workload as last workload", ring_id);
+		if (last_workload->dispatched) {
+			gvt_dbg_el("ring id %d last workload has been dispatched",
+					ring_id);
+			gvt_dbg_el("ctx head %x real head %lx",
+					head, last_workload->rb_tail);
+			/*
+			 * cannot use guest context head pointer here,
+			 * as it might not be updated at this time
+			 */
+			head = last_workload->rb_tail;
+		} else {
+			gvt_dbg_el("ring id %d merged into last workload", ring_id);
+			/*
+			 * if last workload hasn't been dispatched (scanned + shadowed),
+			 * and the context for current submission is just the same as last
+			 * workload context, then we can merge this submission into
+			 * last workload.
+			 */
+			last_workload->rb_tail = tail;
+			return true;
+		}
+	}
+
+	gvt_dbg_el("ring id %d begin a new workload", ring_id);
+
+	workload = kzalloc(sizeof(*workload), GFP_KERNEL);
+	if (!workload) {
+		gvt_err("fail to allocate memory for workload");
+		return false;
+	}
+
+	/* record some ring buffer register values for scan and shadow */
+	hypervisor_read_va(vgt, &ring_context->rb_start.val,
+			&start, 4, 1);
+	hypervisor_read_va(vgt, &ring_context->rb_ctrl.val,
+			&ctl, 4, 1);
+
+	INIT_LIST_HEAD(&workload->list);
+
+	init_waitqueue_head(&workload->shadow_ctx_status_wq);
+	atomic_set(&workload->shadow_ctx_active, 0);
+
+	workload->vgt = vgt;
+	workload->ring_id = ring_id;
+	workload->ctx_desc = *desc;
+	workload->ring_context = ring_context;
+	workload->rb_head = head;
+	workload->rb_tail = tail;
+	workload->rb_start = start;
+	workload->rb_ctl = ctl;
+	workload->complete = execlist_workload_complete;
+	workload->status = -EINPROGRESS;
+
+	gvt_dbg_el("workload %p ring id %d head %x tail %x start %x ctl %x",
+			workload, ring_id, head, tail, start, ctl);
+
+	if (!prepare_workload(workload)) {
+		kfree(workload);
+		return false;
+	}
+
+	queue_workload(workload);
+
+	return true;
+}
+
+bool gvt_execlist_elsp_submit(struct vgt_device *vgt, int ring_id)
+{
+	struct gvt_virtual_execlist_info *info =
+		&vgt->virtual_execlist_info[ring_id];
+	struct execlist_ctx_descriptor_format *desc[2], valid_desc[2];
+	unsigned long valid_desc_bitmap = 0;
+	int i;
+
+	memset(valid_desc, 0, sizeof(valid_desc));
+
+	desc[0] = (struct execlist_ctx_descriptor_format *)&info->bundle.data[2];
+	desc[1] = (struct execlist_ctx_descriptor_format *)&info->bundle.data[0];
+
+	for (i = 0; i < 2; i++) {
+		if (!desc[i]->valid)
+			continue;
+
+		if (!desc[i]->privilege_access) {
+			gvt_err("[vgt %d] unexpected GGTT elsp submission", vgt->id);
+			return false;
+		}
+
+		/* TODO: add another guest context checks here. */
+		set_bit(i, &valid_desc_bitmap);
+		valid_desc[i] = *desc[i];
+	}
+
+	if (!valid_desc_bitmap) {
+		gvt_err("[vgt %d] no valid desc in a elsp submission",
+				vgt->id);
+		return false;
+	}
+
+	if (!test_bit(0, (void *)&valid_desc_bitmap) &&
+			test_bit(1, (void *)&valid_desc_bitmap)) {
+		gvt_err("[vgt %d] weird elsp submission, desc 0 is not valid",
+				vgt->id);
+		return false;
+	}
+
+	if (!emulate_execlist_schedule_in(info, valid_desc)) {
+		gvt_err("[vgt %d] fail to emulate execlist schedule-in", vgt->id);
+		return false;
+	}
+
+	/* submit workload */
+	for_each_set_bit(i, (void *)&valid_desc_bitmap, 2) {
+		if (!submit_context(vgt, ring_id, &valid_desc[i])) {
+			gvt_err("[vgt %d] fail to schedule workload", vgt->id);
+			return false;
+		}
+	}
+	return true;
+}
+
 static bool init_virtual_execlist_info(struct vgt_device *vgt,
 		int ring_id, struct gvt_virtual_execlist_info *info)
 {
@@ -324,6 +584,8 @@ static bool init_virtual_execlist_info(struct vgt_device *vgt,
 	info->ring_id = ring_id;
 	info->execlist[0].index = 0;
 	info->execlist[1].index = 1;
+
+	INIT_LIST_HEAD(&info->workload_q_head);
 
 	ctx_status_ptr_reg = execlist_ring_mmio(info->ring_id,
 			_EL_OFFSET_STATUS_PTR);
@@ -338,6 +600,8 @@ static bool init_virtual_execlist_info(struct vgt_device *vgt,
 bool gvt_init_virtual_execlist_info(struct vgt_device *vgt)
 {
 	int i;
+
+	atomic_set(&vgt->running_workload_num, 0);
 
 	/* each ring has a virtual execlist engine */
 	for (i = 0; i < I915_NUM_RINGS; i++)

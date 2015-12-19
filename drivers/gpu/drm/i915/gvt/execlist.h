@@ -107,8 +107,51 @@ struct execlist_context_status_format {
 	};
 };
 
+struct gvt_execlist_mmio_pair {
+	u32 addr;
+	u32 val;
+};
+
+/* The first 52 dwords in register state context */
+struct execlist_ring_context {
+	u32 nop1;
+	u32 lri_cmd_1;
+	struct gvt_execlist_mmio_pair ctx_ctrl;
+	struct gvt_execlist_mmio_pair ring_header;
+	struct gvt_execlist_mmio_pair ring_tail;
+	struct gvt_execlist_mmio_pair rb_start;
+	struct gvt_execlist_mmio_pair rb_ctrl;
+	struct gvt_execlist_mmio_pair bb_cur_head_UDW;
+	struct gvt_execlist_mmio_pair bb_cur_head_LDW;
+	struct gvt_execlist_mmio_pair bb_state;
+	struct gvt_execlist_mmio_pair second_bb_addr_UDW;
+	struct gvt_execlist_mmio_pair second_bb_addr_LDW;
+	struct gvt_execlist_mmio_pair second_bb_state;
+	struct gvt_execlist_mmio_pair bb_per_ctx_ptr;
+	struct gvt_execlist_mmio_pair rcs_indirect_ctx;
+	struct gvt_execlist_mmio_pair rcs_indirect_ctx_offset;
+	u32 nop2;
+	u32 nop3;
+	u32 nop4;
+	u32 lri_cmd_2;
+	struct gvt_execlist_mmio_pair ctx_timestamp;
+	struct gvt_execlist_mmio_pair pdp3_UDW;
+	struct gvt_execlist_mmio_pair pdp3_LDW;
+	struct gvt_execlist_mmio_pair pdp2_UDW;
+	struct gvt_execlist_mmio_pair pdp2_LDW;
+	struct gvt_execlist_mmio_pair pdp1_UDW;
+	struct gvt_execlist_mmio_pair pdp1_LDW;
+	struct gvt_execlist_mmio_pair pdp0_UDW;
+	struct gvt_execlist_mmio_pair pdp0_LDW;
+};
+
 struct gvt_execlist_state {
 	struct execlist_ctx_descriptor_format ctx[2];
+	u32 index;
+};
+
+struct gvt_execlist_write_bundle {
+	u32 data[4];
 	u32 index;
 };
 
@@ -117,10 +160,20 @@ struct gvt_virtual_execlist_info {
 	struct gvt_execlist_state *running_execlist;
 	struct gvt_execlist_state *pending_execlist;
 	struct execlist_ctx_descriptor_format *running_context;
+	struct gvt_execlist_write_bundle bundle;
 	int ring_id;
 	struct vgt_device *vgt;
+	struct list_head workload_q_head;
 };
 
 bool gvt_init_virtual_execlist_info(struct vgt_device *vgt);
+
+void gvt_get_context_pdp_root_pointer(struct vgt_device *vgt,
+		struct execlist_ring_context *ring_context,
+		u32 pdp[8]);
+
+void gvt_set_context_pdp_root_pointer(struct vgt_device *vgt,
+		struct execlist_ring_context *ring_context,
+		u32 pdp[8]);
 
 #endif /*_GVT_EXECLIST_H_*/

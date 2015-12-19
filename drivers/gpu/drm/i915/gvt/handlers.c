@@ -1100,6 +1100,26 @@ bool fpga_dbg_write(struct vgt_device *vgt, unsigned int reg,
         return gvt_default_mmio_write(vgt, reg, &v, bytes);
 }
 
+static bool elsp_write(struct vgt_device *vgt, unsigned int offset,
+		void *p_data, unsigned int bytes)
+{
+	int ring_id = gvt_render_mmio_to_ring_id(offset);
+	struct gvt_virtual_execlist_info *info =
+			&vgt->virtual_execlist_info[ring_id];
+	u32 data = *(u32 *)p_data;
+	bool rc = true;
+
+	info->bundle.data[info->bundle.index] = data;
+
+	if (info->bundle.index == 3)
+		rc = gvt_execlist_elsp_submit(vgt, ring_id);
+
+	++info->bundle.index;
+	info->bundle.index &= 0x3;
+
+	return rc;
+}
+
 struct gvt_reg_info gvt_general_reg_info[] = {
 	/* Interrupt registers - GT */
 	{_RING_IMR(RENDER_RING_BASE), 4, F_RDR, 0, D_ALL, NULL, gvt_reg_imr_handler},
@@ -1912,15 +1932,15 @@ struct gvt_reg_info gvt_broadwell_reg_info[] = {
 	{_REG_VCS2_TIMESTAMP, 8, F_PT, 0, D_BDW_PLUS, NULL, NULL},
 
 	{_REG_RCS_EXECLIST_SUBMITPORT, 4, F_VIRT, 0, D_BDW_PLUS,
-		mmio_not_allow_read, NULL},
+		mmio_not_allow_read, elsp_write},
 	{_REG_VCS_EXECLIST_SUBMITPORT, 4, F_VIRT, 0, D_BDW_PLUS,
-		mmio_not_allow_read, NULL},
+		mmio_not_allow_read, elsp_write},
 	{_REG_VECS_EXECLIST_SUBMITPORT, 4, F_VIRT, 0, D_BDW_PLUS,
-		mmio_not_allow_read, NULL},
+		mmio_not_allow_read, elsp_write},
 	{_REG_VCS2_EXECLIST_SUBMITPORT, 4, F_VIRT, 0, D_BDW_PLUS,
-		mmio_not_allow_read, NULL},
+		mmio_not_allow_read, elsp_write},
 	{_REG_BCS_EXECLIST_SUBMITPORT, 4, F_VIRT, 0, D_BDW_PLUS,
-		mmio_not_allow_read, NULL},
+		mmio_not_allow_read, elsp_write},
 
 	{_REG_RCS_EXECLIST_STATUS, 8, F_RDR, 0, D_BDW_PLUS, NULL,
 		mmio_not_allow_write},
