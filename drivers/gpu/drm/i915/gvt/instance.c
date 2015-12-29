@@ -193,9 +193,22 @@ void gvt_destroy_instance(struct vgt_device *vgt)
 	struct pgt_device *pdev = vgt->pdev;
 
 	mutex_lock(&pdev->lock);
+
+	gvt_stop_schedule(vgt);
+
+	mutex_unlock(&pdev->lock);
+
+	if (atomic_read(&vgt->running_workload_num))
+		gvt_wait_instance_idle(vgt);
+
+	mutex_lock(&pdev->lock);
+
+	gvt_clean_instance_sched_policy(vgt);
+
 	gvt_set_instance_offline(vgt);
 	if (vgt->id != -1)
 		idr_remove(&pdev->instance_idr, vgt->id);
+
 	mutex_unlock(&pdev->lock);
 
 	hypervisor_hvm_exit(vgt);
@@ -233,6 +246,9 @@ struct vgt_device *gvt_create_instance(struct pgt_device *pdev,
 	vgt->vm_id = info->domid;
 	vgt->id = id;
 	vgt->pdev = pdev;
+
+	if (!gvt_init_instance_sched_policy(vgt))
+		goto err;
 
 	vgt->warn_untrack = true;
 

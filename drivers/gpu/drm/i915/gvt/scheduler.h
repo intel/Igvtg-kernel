@@ -35,6 +35,9 @@ struct gvt_workload_scheduler {
 	wait_queue_head_t workload_complete_wq;
 	struct task_struct *thread[I915_NUM_RINGS];
 	wait_queue_head_t waitq[I915_NUM_RINGS];
+
+	void *sched_data;
+	struct gvt_schedule_policy_ops *sched_ops;
 };
 
 struct gvt_workload {

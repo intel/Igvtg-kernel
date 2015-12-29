@@ -434,6 +434,8 @@ void gvt_clean_workload_scheduler(struct pgt_device *pdev)
 
 	i915_gem_context_unreference(scheduler->shadow_ctx);
 	scheduler->shadow_ctx = NULL;
+
+	gvt_clean_sched_policy(pdev);
 }
 
 bool gvt_init_workload_scheduler(struct pgt_device *pdev)
@@ -473,6 +475,9 @@ bool gvt_init_workload_scheduler(struct pgt_device *pdev)
 			goto err;
 		}
 	}
+
+	if (!gvt_init_sched_policy(pdev))
+		goto err;
 
 	return true;
 err:

@@ -259,6 +259,22 @@ static bool dpy_reg_mmio_read_3(struct vgt_device *vgt, unsigned int offset,
 static bool ring_mode_write(struct vgt_device *vgt, unsigned int off,
 		void *p_data, unsigned int bytes)
 {
+	u32 data = *(u32 *)p_data;
+	int ring_id = gvt_render_mmio_to_ring_id(off);
+	bool enable_execlist;
+
+	if (_MASKED_BIT_ENABLE(GFX_RUN_LIST_ENABLE)
+			|| _MASKED_BIT_DISABLE(GFX_RUN_LIST_ENABLE)) {
+		enable_execlist = !!(data & GFX_RUN_LIST_ENABLE);
+
+		gvt_info("EXECLIST %s on ring %d.",
+				(enable_execlist ? "enabling" : "disabling"),
+				ring_id);
+
+		if (enable_execlist)
+			gvt_start_schedule(vgt);
+	}
+
 	return true;
 }
 

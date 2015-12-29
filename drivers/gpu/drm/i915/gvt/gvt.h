@@ -44,6 +44,7 @@
 #include "display.h"
 #include "execlist.h"
 #include "scheduler.h"
+#include "sched_policy.h"
 
 #define GVT_MAX_VGPU 8
 
@@ -160,6 +161,7 @@ struct vgt_device {
 	unsigned long last_reset_time;
 	atomic_t crashing;
 	bool warn_untrack;
+	void *sched_data;
 };
 
 struct gvt_gm_allocator {
