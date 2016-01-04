@@ -37,6 +37,7 @@
 #include "perf.h"
 #include "gtt.h"
 #include "cfg_space.h"
+#include "opregion.h"
 
 #define GVT_MAX_VGPU 8
 
@@ -100,7 +101,12 @@ struct gvt_virtual_cfg_state {
 	unsigned char space[GVT_CFG_SPACE_SZ];
 	bool bar_mapped[GVT_BAR_NUM];
 	u64 bar_size[GVT_BAR_NUM];
-	void *opregion_va;
+};
+
+struct gvt_virtual_opregion_state {
+	void *va;
+	u64 gfn[GVT_OPREGION_PAGES];
+	struct page *pages[GVT_OPREGION_PAGES];
 };
 
 struct gvt_virtual_gm_state {
@@ -119,6 +125,7 @@ struct gvt_virtual_device_state {
 	struct gvt_virtual_gm_state gm;
 	struct gvt_virtual_mmio_state mmio;
 	struct gvt_virtual_cfg_state cfg;
+	struct gvt_virtual_opregion_state opregion;
 };
 
 struct vgt_device {
@@ -160,6 +167,9 @@ struct pgt_device {
 
 	u32 mmio_size;
 	u32 reg_num;
+
+	void *opregion_va;
+	u32 opregion_pa;
 
 	wait_queue_head_t service_thread_wq;
 	struct task_struct *service_thread;

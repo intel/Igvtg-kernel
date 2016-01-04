@@ -263,6 +263,7 @@ static void clean_pgt_device(struct pgt_device *pdev)
 	gvt_clean_gtt(pdev);
 	gvt_irq_exit(pdev);
 	gvt_clean_mmio_emulation_state(pdev);
+	gvt_clean_opregion(pdev);
 	clean_initial_mmio_state(pdev);
 	gvt_clean_resource_allocator(pdev);
 }
@@ -275,6 +276,9 @@ static bool init_pgt_device(struct pgt_device *pdev, struct drm_i915_private *de
 	init_initial_cfg_space_state(pdev);
 
 	if (!init_initial_mmio_state(pdev))
+		goto err;
+
+	if (!gvt_init_opregion(pdev))
 		goto err;
 
 	gvt_init_resource_allocator(pdev);

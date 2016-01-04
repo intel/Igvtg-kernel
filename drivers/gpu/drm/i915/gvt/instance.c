@@ -165,6 +165,7 @@ static void destroy_virtual_device_state(struct vgt_device *vgt)
 	gvt_clean_vgtt(vgt);
 	destroy_virtual_mmio_state(vgt);
 	destroy_virtual_gm_state(vgt);
+	gvt_clean_instance_opregion(vgt);
 }
 
 static bool create_virtual_device_state(struct vgt_device *vgt,
@@ -199,6 +200,7 @@ void gvt_destroy_instance(struct vgt_device *vgt)
 struct vgt_device *gvt_create_instance(struct pgt_device *pdev,
 		struct gvt_instance_info *info)
 {
+	struct gvt_host *host = &gvt_host;
 	struct vgt_device *vgt = NULL;
 	int id;
 
@@ -231,6 +233,10 @@ struct vgt_device *gvt_create_instance(struct pgt_device *pdev,
 
 	if (hypervisor_hvm_init(vgt) < 0)
 		goto err;
+
+	if (host->hypervisor_type == GVT_HYPERVISOR_TYPE_KVM)
+		if (!gvt_init_instance_opregion(vgt, 0))
+			goto err;
 
 	gvt_set_instance_online(vgt);
 

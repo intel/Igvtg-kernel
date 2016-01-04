@@ -135,6 +135,19 @@ bool gvt_emulate_cfg_write(struct vgt_device *vgt, unsigned int off,
 					*(char *)p_data, bytes);
 			break;
 
+		case GVT_REG_CFG_SWSCI_TRIGGER:
+			new = *(u32 *)p_data;
+			gvt_emulate_opregion_request(vgt, new);
+			break;
+
+		case GVT_REG_CFG_OPREGION:
+			new = *(u32 *)p_data;
+			if (!gvt_init_instance_opregion(vgt, new))
+				return false;
+
+			memcpy(&vgt->state.cfg.space[off], p_data, bytes);
+			break;
+
 		case GVT_REG_CFG_SPACE_BAR1+4:
 		case GVT_REG_CFG_SPACE_BAR0+4:
 		case GVT_REG_CFG_SPACE_BAR2+4:
