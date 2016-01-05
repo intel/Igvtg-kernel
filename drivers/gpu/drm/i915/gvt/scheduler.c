@@ -106,6 +106,7 @@ static void shadow_context_schedule_in(void *data)
 {
 	struct gvt_workload *workload = (struct gvt_workload *)data;
 
+	gvt_load_render_mmio(workload->vgt, workload->ring_id);
 	atomic_set(&workload->shadow_ctx_active, 1);
 	wake_up(&workload->shadow_ctx_status_wq);
 }
@@ -114,6 +115,7 @@ static void shadow_context_schedule_out(void *data)
 {
 	struct gvt_workload *workload = (struct gvt_workload *)data;
 
+	gvt_restore_render_mmio(workload->vgt, workload->ring_id);
 	atomic_set(&workload->shadow_ctx_active, 0);
 	wake_up(&workload->shadow_ctx_status_wq);
 }

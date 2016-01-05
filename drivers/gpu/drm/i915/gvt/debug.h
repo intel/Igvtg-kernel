@@ -87,6 +87,9 @@ enum {
 #define gvt_dbg_irq(fmt, args...) \
 	gvt_dbg(GVT_DBG_IRQ, fmt, ##args)
 
+#define gvt_dbg_render(fmt, args...) \
+	gvt_dbg(GVT_DBG_RENDER, fmt, ##args)
+
 #define gvt_dbg_el(fmt, args...) \
 	gvt_dbg(GVT_DBG_EL, fmt, ##args)
 

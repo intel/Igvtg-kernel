@@ -45,6 +45,7 @@
 #include "execlist.h"
 #include "scheduler.h"
 #include "sched_policy.h"
+#include "render.h"
 
 #define GVT_MAX_VGPU 8
 
