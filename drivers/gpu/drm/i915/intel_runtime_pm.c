@@ -50,7 +50,7 @@
  */
 
 #define GEN9_ENABLE_DC5(dev) 0
-#define SKL_ENABLE_DC6(dev) IS_SKYLAKE(dev)
+#define SKL_ENABLE_DC6(dev) (HAS_CSR(dev) && IS_SKYLAKE(dev))
 
 #define for_each_power_well(i, power_well, domain_mask, power_domains)	\
 	for (i = 0;							\
@@ -462,7 +462,7 @@ static void assert_can_enable_dc5(struct drm_i915_private *dev_priv)
 					SKL_DISP_PW_2);
 
 	WARN(!IS_SKYLAKE(dev), "Platform doesn't support DC5.\n");
-	WARN(!HAS_RUNTIME_PM(dev), "Runtime PM not enabled.\n");
+	WARN(!HAS_RUNTIME_PM(dev) && !intel_vgpu_active(dev), "Runtime PM not enabled.\n");
 	WARN(pg2_enabled, "PG2 not disabled to enable DC5.\n");
 
 	WARN((I915_READ(DC_STATE_EN) & DC_STATE_EN_UPTO_DC5),
@@ -525,7 +525,7 @@ static void assert_can_enable_dc6(struct drm_i915_private *dev_priv)
 	struct drm_device *dev = dev_priv->dev;
 
 	WARN(!IS_SKYLAKE(dev), "Platform doesn't support DC6.\n");
-	WARN(!HAS_RUNTIME_PM(dev), "Runtime PM not enabled.\n");
+	WARN(!HAS_RUNTIME_PM(dev) && !intel_vgpu_active(dev), "Runtime PM not enabled.\n");
 	WARN(I915_READ(UTIL_PIN_CTL) & UTIL_PIN_ENABLE,
 		"Backlight is not disabled.\n");
 	WARN((I915_READ(DC_STATE_EN) & DC_STATE_EN_UPTO_DC6),

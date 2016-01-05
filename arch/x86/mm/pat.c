@@ -192,7 +192,6 @@ void pat_init_cache_modes(u64 pat)
 					   pat_msg + 4 * i);
 		update_cache_mode_entry(i, cache);
 	}
-	pr_info("x86/PAT: Configuration [0-7]: %s\n", pat_msg);
 }
 
 #define PAT(x, y)	((u64)PAT_ ## y << ((x)*8))

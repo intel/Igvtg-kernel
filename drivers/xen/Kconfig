@@ -280,4 +280,9 @@ config XEN_ACPI
 	def_bool y
 	depends on X86 && ACPI
 
+config XENGT
+	tristate "Xen Dom0 support for i915 vgt device model"
+	depends on XEN_DOM0 && I915_VGT
+	default m
+
 endmenu

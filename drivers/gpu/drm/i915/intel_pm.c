@@ -6264,7 +6264,7 @@ void intel_enable_gt_powersave(struct drm_device *dev)
 	struct drm_i915_private *dev_priv = dev->dev_private;
 
 	/* Powersaving is controlled by the host when inside a VM */
-	if (intel_vgpu_active(dev))
+	if (intel_vgpu_active(dev) && !i915_host_mediate)
 		return;
 
 	if (IS_IRONLAKE_M(dev)) {
@@ -6619,8 +6619,7 @@ static void broadwell_init_clock_gating(struct drm_device *dev)
 
 	ilk_init_lp_watermarks(dev);
 
-	/* WaSwitchSolVfFArbitrationPriority:bdw */
-	I915_WRITE(GAM_ECOCHK, I915_READ(GAM_ECOCHK) | HSW_ECOCHK_ARB_PRIO_SOL);
+	I915_WRITE(GAM_ECOCHK, I915_READ(GAM_ECOCHK) | ECOCHK_PPGTT_WB_HSW);
 
 	/* WaPsrDPAMaskVBlankInSRD:bdw */
 	I915_WRITE(CHICKEN_PAR1_1,
@@ -6661,6 +6660,19 @@ static void broadwell_init_clock_gating(struct drm_device *dev)
 	 * are ever enabled GTT cache may need to be disabled.
 	 */
 	I915_WRITE(HSW_GTT_CACHE_EN, GTT_CACHE_EN_ALL);
+
+	if (i915.enable_execlists) {
+		/* WaOCLCoherentLineFlush:bdw */
+		I915_WRITE(GEN8_L3SQCREG4, I915_READ(GEN8_L3SQCREG4) |
+			   GEN8_PIPELINE_FLUSH_COHERENT_LINES);
+
+		/* WaDisableMidThreadPreempt:bdw */
+		I915_WRITE(GEN8_FF_SLICE_CS_CHICKEN2,
+			   I915_READ(GEN8_FF_SLICE_CS_CHICKEN2) |
+			   _MASKED_BIT_ENABLE(GEN8_THREAD_GROUP_PREEMPTION));
+	}
+
+	I915_WRITE(0xb10c, (I915_READ(0xb10c) & ~(0xf << 20)) | (0x8 << 20));
 
 	lpt_init_clock_gating(dev);
 }

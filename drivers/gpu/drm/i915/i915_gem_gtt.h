@@ -108,6 +108,7 @@ typedef uint64_t gen8_ppgtt_pml4e_t;
 #define GEN8_PTE_MASK			0x1ff
 #define GEN8_LEGACY_PDPES		4
 #define GEN8_PTES			I915_PTES(sizeof(gen8_pte_t))
+#define GEN8_PDES			(PAGE_SIZE / (sizeof(gen8_pde_t)))
 
 #define I915_PDPES_PER_PDP(dev) (USES_FULL_48BIT_PPGTT(dev) ?\
 				 GEN8_PML4ES_PER_PML4 : GEN8_LEGACY_PDPES)
@@ -242,6 +243,8 @@ struct i915_page_scratch {
 };
 
 struct i915_page_table {
+	struct page *page;
+	dma_addr_t daddr;
 	struct i915_page_dma base;
 
 	unsigned long *used_ptes;
@@ -249,6 +252,10 @@ struct i915_page_table {
 
 struct i915_page_directory {
 	struct i915_page_dma base;
+	union {
+		uint32_t pd_offset;
+		dma_addr_t daddr;
+	};
 
 	unsigned long *used_pdes;
 	struct i915_page_table *page_table[I915_PDES]; /* PDEs */

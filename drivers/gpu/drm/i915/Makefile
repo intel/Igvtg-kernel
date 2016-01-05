@@ -2,6 +2,8 @@
 # Makefile for the drm device driver.  This driver provides support for the
 # Direct Rendering Infrastructure (DRI) in XFree86 4.1.0 and higher.
 
+subdir-ccflags-$(CONFIG_DRM_I915_WERROR) := -Werror
+
 # Please keep these build lists sorted!
 
 # core driver code
@@ -33,6 +35,7 @@ i915-y += i915_cmd_parser.o \
 	  i915_gem_stolen.o \
 	  i915_gem_tiling.o \
 	  i915_gem_userptr.o \
+	  i915_gem_vgtbuffer.o \
 	  i915_gpu_error.o \
 	  i915_trace_points.o \
 	  intel_lrc.o \
@@ -97,5 +100,31 @@ i915-y += i915_vgpu.o
 i915-y += i915_dma.o
 
 obj-$(CONFIG_DRM_I915)  += i915.o
+
+VGT := vgt
+ccflags-$(CONFIG_I915_VGT) += -I$(src)/$(VGT) -I$(src) -Wall
+i915-$(CONFIG_I915_VGT)  += $(VGT)/vgt.o	\
+			   $(VGT)/render.o \
+			   $(VGT)/mmio.o \
+			   $(VGT)/handlers.o \
+			   $(VGT)/legacy/handlers_hsw.o \
+			   $(VGT)/interrupt.o \
+			   $(VGT)/sysfs.o \
+			   $(VGT)/display.o \
+			   $(VGT)/debugfs.o \
+			   $(VGT)/edid.o \
+			   $(VGT)/gtt.o \
+			   $(VGT)/aperture_gm.o \
+			   $(VGT)/utility.o \
+			   $(VGT)/dev.o \
+			   $(VGT)/cmd_parser.o \
+			   $(VGT)/sched.o \
+			   $(VGT)/instance.o \
+			   $(VGT)/cfg_space.o \
+			   $(VGT)/fb_decoder.o \
+			   $(VGT)/vbios.o \
+			   $(VGT)/host.o \
+			   $(VGT)/execlists.o \
+			   $(VGT)/legacy/render_hsw.o
 
 CFLAGS_i915_trace_points.o := -I$(src)

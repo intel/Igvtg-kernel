@@ -3224,9 +3224,9 @@ void intel_ddi_init(struct drm_device *dev, enum port port)
 		 */
 		if (IS_BROXTON(dev_priv) && (INTEL_REVID(dev) < BXT_REVID_B0)
 					 && port == PORT_B)
-			dev_priv->hotplug.irq_port[PORT_A] = intel_dig_port;
+			dev_priv->hpd_irq_port[PORT_A] = intel_dig_port;
 		else
-			dev_priv->hotplug.irq_port[port] = intel_dig_port;
+			dev_priv->hpd_irq_port[port] = intel_dig_port;
 	}
 
 	/* In theory we don't need the encoder->type check, but leave it just in

@@ -109,6 +109,13 @@ i915_gem_wait_for_error(struct i915_gpu_error *error)
 	return 0;
 }
 
+int i915_wait_error_work_complete(struct drm_device *dev)
+{
+       struct drm_i915_private *dev_priv = dev->dev_private;
+
+       return i915_gem_wait_for_error(&dev_priv->gpu_error);
+}
+
 int i915_mutex_lock_interruptible(struct drm_device *dev)
 {
 	struct drm_i915_private *dev_priv = dev->dev_private;
@@ -146,8 +153,13 @@ i915_gem_get_aperture_ioctl(struct drm_device *dev, void *data,
 			pinned += vma->node.size;
 	mutex_unlock(&dev->struct_mutex);
 
-	args->aper_size = dev_priv->gtt.base.total;
-	args->aper_available_size = args->aper_size - pinned;
+	if (!intel_vgpu_active(dev)) {
+		args->aper_size = dev_priv->gtt.base.total;
+		args->aper_available_size = args->aper_size - pinned;
+	} else {
+		args->aper_size = dev_priv->mm.vgt_low_gm_size + dev_priv->mm.vgt_high_gm_size;
+		args->aper_available_size = dev_priv->mm.vgt_low_gm_size + dev_priv->mm.vgt_high_gm_size - pinned;
+	}
 
 	return 0;
 }
@@ -3225,7 +3237,8 @@ int i915_vma_unbind(struct i915_vma *vma)
 	if (vma->pin_count)
 		return -EBUSY;
 
-	BUG_ON(obj->pages == NULL);
+	if (!obj->has_vmfb_mapping)
+		BUG_ON(obj->pages == NULL);
 
 	ret = i915_gem_object_wait_rendering(obj, false);
 	if (ret)
@@ -3236,7 +3249,7 @@ int i915_vma_unbind(struct i915_vma *vma)
 	 */
 
 	if (i915_is_ggtt(vma->vm) &&
-	    vma->ggtt_view.type == I915_GGTT_VIEW_NORMAL) {
+	    vma->ggtt_view.type == I915_GGTT_VIEW_NORMAL && !obj->has_vmfb_mapping) {
 		i915_gem_object_finish_gtt(obj);
 
 		/* release the fence reg _after_ flushing */
@@ -3261,13 +3274,17 @@ int i915_vma_unbind(struct i915_vma *vma)
 		vma->ggtt_view.pages = NULL;
 	}
 
-	drm_mm_remove_node(&vma->node);
+	if (!(obj->has_vmfb_mapping && i915_is_ggtt(vma->vm)))
+		drm_mm_remove_node(&vma->node);
+
 	i915_gem_vma_destroy(vma);
 
 	/* Since the unbound list is global, only move to that list if
 	 * no more VMAs exist. */
-	if (list_empty(&obj->vma_list))
+	if (list_empty(&obj->vma_list) && !obj->has_vmfb_mapping) {
+		i915_gem_gtt_finish_object(obj);
 		list_move_tail(&obj->global_list, &dev_priv->mm.unbound_list);
+	}
 
 	/* And finally now the object is completely decoupled from this vma,
 	 * we can drop its hold on the backing storage and allow it to be
@@ -3425,17 +3442,27 @@ i915_gem_object_bind_to_vm(struct drm_i915_gem_object *obj,
 		return ERR_PTR(-E2BIG);
 	}
 
-	ret = i915_gem_object_get_pages(obj);
-	if (ret)
-		return ERR_PTR(ret);
+	if (!obj->has_vmfb_mapping) {
+		ret = i915_gem_object_get_pages(obj);
+		if (ret)
+			return ERR_PTR(ret);
 
-	i915_gem_object_pin_pages(obj);
+		i915_gem_object_pin_pages(obj);
+	}
 
 	vma = ggtt_view ? i915_gem_obj_lookup_or_create_ggtt_vma(obj, ggtt_view) :
 			  i915_gem_obj_lookup_or_create_vma(obj, vm);
 
 	if (IS_ERR(vma))
 		goto err_unpin;
+
+	if (obj->has_vmfb_mapping && i915_is_ggtt(vm)) {
+		vma->node.allocated = 1;
+		trace_i915_vma_bind(vma, flags);
+		i915_vma_bind(vma, obj->cache_level,
+			flags & PIN_GLOBAL ? GLOBAL_BIND : 0);
+		return vma;
+	}
 
 search_free:
 	ret = drm_mm_insert_node_in_range_generic(&vm->mm, &vma->node,
@@ -3451,6 +3478,12 @@ search_free:
 					       flags);
 		if (ret == 0)
 			goto search_free;
+
+		DRM_ERROR("fail to allocate space from %s GM space, size: %u.\n",
+				obj->map_and_fenceable ? "low" : "whole",
+				size);
+
+		dump_stack();
 
 		goto err_free_vma;
 	}
@@ -4421,6 +4454,10 @@ struct i915_vma *i915_gem_obj_to_ggtt_view(struct drm_i915_gem_object *obj,
 void i915_gem_vma_destroy(struct i915_vma *vma)
 {
 	struct i915_address_space *vm = NULL;
+
+	if (vma->obj->has_vmfb_mapping)
+		vma->node.allocated = 0;
+
 	WARN_ON(vma->node.allocated);
 
 	/* Keep the vma as a placeholder in the execbuffer reservation lists */
@@ -4690,21 +4727,24 @@ i915_gem_init_hw(struct drm_device *dev)
 			goto out;
 	}
 
-	/* We can't enable contexts until all firmware is loaded */
-	ret = intel_guc_ucode_load(dev);
-	if (ret) {
-		/*
-		 * If we got an error and GuC submission is enabled, map
-		 * the error to -EIO so the GPU will be declared wedged.
-		 * OTOH, if we didn't intend to use the GuC anyway, just
-		 * discard the error and carry on.
-		 */
-		DRM_ERROR("Failed to initialize GuC, error %d%s\n", ret,
-			i915.enable_guc_submission ? "" : " (ignored)");
-		ret = i915.enable_guc_submission ? -EIO : 0;
-		if (ret)
-			goto out;
-	}
+	if (!intel_vgpu_active(dev)) {
+		/* We can't enable contexts until all firmware is loaded */
+		ret = intel_guc_ucode_load(dev);
+		if (ret) {
+			/*
+			 * If we got an error and GuC submission is enabled, map
+			 * the error to -EIO so the GPU will be declared wedged.
+			 * OTOH, if we didn't intend to use the GuC anyway, just
+			 * discard the error and carry on.
+			 */
+			DRM_ERROR("Failed to initialize GuC, error %d%s\n", ret,
+					i915.enable_guc_submission ? "" : " (ignored)");
+			ret = i915.enable_guc_submission ? -EIO : 0;
+			if (ret)
+				goto out;
+		}
+	} else
+		i915.enable_guc_submission = false;
 
 	/* Now it is safe to go back round and do everything else: */
 	for_each_ring(ring, dev_priv, i) {

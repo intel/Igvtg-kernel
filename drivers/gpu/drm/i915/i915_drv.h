@@ -39,6 +39,7 @@
 #include "intel_lrc.h"
 #include "i915_gem_gtt.h"
 #include "i915_gem_render_state.h"
+#include "i915_vgt.h"
 #include <linux/io-mapping.h>
 #include <linux/i2c.h>
 #include <linux/i2c-algo-bit.h>
@@ -51,6 +52,11 @@
 #include <linux/kref.h>
 #include <linux/pm_qos.h>
 #include "intel_guc.h"
+
+#ifdef CONFIG_I915_VGT
+#include <linux/irq_work.h>
+#define DRM_I915_VGT_SUPPORT	1
+#endif
 
 /* General customization:
  */
@@ -221,36 +227,6 @@ enum hpd_pin {
 
 #define for_each_hpd_pin(__pin) \
 	for ((__pin) = (HPD_NONE + 1); (__pin) < HPD_NUM_PINS; (__pin)++)
-
-struct i915_hotplug {
-	struct work_struct hotplug_work;
-
-	struct {
-		unsigned long last_jiffies;
-		int count;
-		enum {
-			HPD_ENABLED = 0,
-			HPD_DISABLED = 1,
-			HPD_MARK_DISABLED = 2
-		} state;
-	} stats[HPD_NUM_PINS];
-	u32 event_bits;
-	struct delayed_work reenable_work;
-
-	struct intel_digital_port *irq_port[I915_MAX_PORTS];
-	u32 long_port_mask;
-	u32 short_port_mask;
-	struct work_struct dig_port_work;
-
-	/*
-	 * if we get a HPD irq from DP and a HPD irq from non-DP
-	 * the non-DP HPD could block the workqueue on a mode config
-	 * mutex getting, that userspace may have taken. However
-	 * userspace is waiting on the DP workqueue to run which is
-	 * blocked behind the non-DP one.
-	 */
-	struct workqueue_struct *dp_wq;
-};
 
 #define I915_GEM_GPU_DOMAINS \
 	(I915_GEM_DOMAIN_RENDER | \
@@ -1274,6 +1250,12 @@ struct i915_gem_mm {
 
 	/** PPGTT used for aliasing the PPGTT with the GTT */
 	struct i915_hw_ppgtt *aliasing_ppgtt;
+	/*
+	 * VGT:
+	 * Original i915 driver in 3.11.6 remove this entry,
+	 * whatever we need this for PPGTT ballooning.
+	 */
+	unsigned int first_ppgtt_pde_in_gtt;
 
 	struct notifier_block oom_notifier;
 	struct shrinker shrinker;
@@ -1326,6 +1308,14 @@ struct i915_gem_mm {
 	spinlock_t object_stat_lock;
 	size_t object_memory;
 	u32 object_count;
+
+#ifdef DRM_I915_VGT_SUPPORT
+	/* VGT balloon info */
+	unsigned long vgt_low_gm_base;
+	unsigned long vgt_low_gm_size;
+	unsigned long vgt_high_gm_base;
+	unsigned long vgt_high_gm_size;
+#endif
 };
 
 struct drm_i915_error_state_buf {
@@ -1766,7 +1756,19 @@ struct drm_i915_private {
 	u32 pm_rps_events;
 	u32 pipestat_irq_mask[I915_MAX_PIPES];
 
-	struct i915_hotplug hotplug;
+	struct work_struct hotplug_work;       
+	struct {                               
+		unsigned long hpd_last_jiffies;
+		int hpd_cnt;                   
+		enum {                         
+			HPD_ENABLED = 0,       
+			HPD_DISABLED = 1,      
+			HPD_MARK_DISABLED = 2  
+		} hpd_mark;                    
+	} hpd_stats[HPD_NUM_PINS];             
+	u32 hpd_event_bits;                    
+	struct delayed_work hotplug_reenable_work;
+
 	struct i915_fbc fbc;
 	struct i915_drrs drrs;
 	struct intel_opregion opregion;
@@ -1930,6 +1932,35 @@ struct drm_i915_private {
 
 	struct i915_runtime_pm pm;
 
+	struct intel_digital_port *hpd_irq_port[I915_MAX_PORTS];
+	u32 long_hpd_port_mask;
+	u32 short_hpd_port_mask;
+	struct work_struct dig_port_work;
+
+	/*
+	 * if we get a HPD irq from DP and a HPD irq from non-DP
+	 * the non-DP HPD could block the workqueue on a mode config
+	 * mutex getting, that userspace may have taken. However
+	 * userspace is waiting on the DP workqueue to run which is
+	 * blocked behind the non-DP one.
+	 */
+	struct workqueue_struct *dp_wq;
+
+#ifdef CONFIG_I915_VGT
+	/* vgt host-side mediation */
+	void *pgt;
+	struct irq_work irq_work;
+	spinlock_t irq_work_lock;
+	struct {
+		irqreturn_t(*irq_handler) (int irq, void *arg);
+		void (*irq_preinstall) (struct drm_device *dev);
+		int (*irq_postinstall) (struct drm_device *dev);
+		void (*irq_uninstall) (struct drm_device *dev);
+	} irq_ops;
+#endif
+
+	unsigned long value_of_0xfdc;
+
 	/* Abstract the submission mechanism (legacy ringbuffer or execlists) away */
 	struct {
 		int (*execbuf_submit)(struct i915_execbuffer_params *params,
@@ -1995,6 +2026,8 @@ struct drm_i915_gem_object_ops {
 	void (*put_pages)(struct drm_i915_gem_object *);
 	int (*dmabuf_export)(struct drm_i915_gem_object *);
 	void (*release)(struct drm_i915_gem_object *);
+	int (*pin)(struct drm_i915_gem_object *, uint32_t, bool, bool);
+	void (*unpin)(struct drm_i915_gem_object *);
 };
 
 /*
@@ -2096,6 +2129,10 @@ struct drm_i915_gem_object {
 	unsigned int cache_level:3;
 	unsigned int cache_dirty:1;
 
+	unsigned int has_dma_mapping:1;
+
+	unsigned int has_vmfb_mapping:1;
+
 	unsigned int frontbuffer_bits:INTEL_FRONTBUFFER_BITS;
 
 	unsigned int pin_display;
@@ -2151,6 +2188,7 @@ struct drm_i915_gem_object {
 		} userptr;
 	};
 };
+
 #define to_intel_bo(x) container_of(x, struct drm_i915_gem_object, base)
 
 void i915_gem_track_fb(struct drm_i915_gem_object *old,
@@ -2559,13 +2597,13 @@ struct drm_i915_cmd_table {
 #define HAS_PSR(dev)		(IS_HASWELL(dev) || IS_BROADWELL(dev) || \
 				 IS_VALLEYVIEW(dev) || IS_CHERRYVIEW(dev) || \
 				 IS_SKYLAKE(dev))
-#define HAS_RUNTIME_PM(dev)	(IS_GEN6(dev) || IS_HASWELL(dev) || \
+#define HAS_RUNTIME_PM(dev)	(!intel_vgpu_active(dev) && (IS_GEN6(dev) || IS_HASWELL(dev) || \
 				 IS_BROADWELL(dev) || IS_VALLEYVIEW(dev) || \
-				 IS_SKYLAKE(dev))
+				 IS_SKYLAKE(dev)))
 #define HAS_RC6(dev)		(INTEL_INFO(dev)->gen >= 6)
 #define HAS_RC6p(dev)		(INTEL_INFO(dev)->gen == 6 || IS_IVYBRIDGE(dev))
 
-#define HAS_CSR(dev)	(IS_SKYLAKE(dev))
+#define HAS_CSR(dev)	(IS_SKYLAKE(dev) && (!intel_vgpu_active(dev) || i915_host_mediate))
 
 #define HAS_GUC_UCODE(dev)	(IS_GEN9(dev))
 #define HAS_GUC_SCHED(dev)	(IS_GEN9(dev))
@@ -2614,6 +2652,7 @@ extern int i915_resume_legacy(struct drm_device *dev);
 struct i915_params {
 	int modeset;
 	int panel_ignore_lid;
+	unsigned int powersave;
 	int semaphores;
 	int lvds_channel_mode;
 	int panel_use_ssc;
@@ -2621,6 +2660,7 @@ struct i915_params {
 	int enable_rc6;
 	int enable_fbc;
 	int enable_ppgtt;
+	bool ctx_switch;
 	int enable_execlists;
 	int enable_psr;
 	unsigned int preliminary_hw_support;
@@ -2768,6 +2808,8 @@ int i915_gem_throttle_ioctl(struct drm_device *dev, void *data,
 			    struct drm_file *file_priv);
 int i915_gem_madvise_ioctl(struct drm_device *dev, void *data,
 			   struct drm_file *file_priv);
+int i915_gem_vgtbuffer_ioctl(struct drm_device *dev, void *data,
+			     struct drm_file *file);
 int i915_gem_set_tiling(struct drm_device *dev, void *data,
 			struct drm_file *file_priv);
 int i915_gem_get_tiling(struct drm_device *dev, void *data,
@@ -2851,11 +2893,15 @@ i915_gem_object_get_page(struct drm_i915_gem_object *obj, int n)
 
 static inline void i915_gem_object_pin_pages(struct drm_i915_gem_object *obj)
 {
+	if (obj->has_vmfb_mapping)
+		return;
 	BUG_ON(obj->pages == NULL);
 	obj->pages_pin_count++;
 }
 static inline void i915_gem_object_unpin_pages(struct drm_i915_gem_object *obj)
 {
+	if (obj->has_vmfb_mapping)
+		return;
 	BUG_ON(obj->pages_pin_count == 0);
 	obj->pages_pin_count--;
 }
@@ -2938,6 +2984,7 @@ int i915_gem_init_rings(struct drm_device *dev);
 int __must_check i915_gem_init_hw(struct drm_device *dev);
 int i915_gem_l3_remap(struct drm_i915_gem_request *req, int slice);
 void i915_gem_init_swizzling(struct drm_device *dev);
+bool intel_enable_ppgtt(struct drm_device *dev);
 void i915_gem_cleanup_ringbuffer(struct drm_device *dev);
 int __must_check i915_gpu_idle(struct drm_device *dev);
 int __must_check i915_gem_suspend(struct drm_device *dev);
@@ -3336,6 +3383,12 @@ extern struct intel_display_error_state *intel_display_capture_error_state(struc
 extern void intel_display_print_error_state(struct drm_i915_error_state_buf *e,
 					    struct drm_device *dev,
 					    struct intel_display_error_state *error);
+#ifdef CONFIG_I915_VGT
+extern bool vgt_can_process_irq(void);
+extern bool vgt_can_process_timer(void *timer);
+extern void vgt_new_delay_event_timer(void *timer);
+extern void i915_check_vgt(struct drm_i915_private *dev_priv);
+#endif
 
 int sandybridge_pcode_read(struct drm_i915_private *dev_priv, u32 mbox, u32 *val);
 int sandybridge_pcode_write(struct drm_i915_private *dev_priv, u32 mbox, u32 val);
@@ -3366,27 +3419,59 @@ void vlv_flisdsi_write(struct drm_i915_private *dev_priv, u32 reg, u32 val);
 int intel_gpu_freq(struct drm_i915_private *dev_priv, int val);
 int intel_freq_opcode(struct drm_i915_private *dev_priv, int val);
 
-#define I915_READ8(reg)		dev_priv->uncore.funcs.mmio_readb(dev_priv, (reg), true)
-#define I915_WRITE8(reg, val)	dev_priv->uncore.funcs.mmio_writeb(dev_priv, (reg), (val), true)
+/* Intel GVT-g MMIO mediation */
+extern bool i915_host_mediate __read_mostly;
+#define __i915_read(x, y) \
+static u##x inline i915_read##x(struct drm_i915_private *dev_priv, u32 reg,	\
+		bool trace) {							\
+	u##x val = 0;								\
+	if (i915_host_mediate)							\
+		vgt_host_read((reg), &val, sizeof(u##x), false, trace);		\
+	else									\
+		val = dev_priv->uncore.funcs.mmio_read##y(dev_priv,		\
+				reg, trace);					\
+	return val;								\
+}
+__i915_read(8, b)
+__i915_read(16, w)
+__i915_read(32, l)
+__i915_read(64, q)
+#undef __i915_read
+#define __i915_write(x, y) \
+static void inline i915_write##x(struct drm_i915_private *dev_priv, u32 reg,	\
+		u##x val, bool trace)						\
+{										\
+	if (i915_host_mediate)							\
+		vgt_host_write(reg, &val, sizeof(u##x), false, trace);		\
+	else									\
+		dev_priv->uncore.funcs.mmio_write##y(dev_priv,			\
+				(reg), (val), trace);				\
+}
+__i915_write(8, b)
+__i915_write(16, w)
+__i915_write(32, l)
+__i915_write(64, q)
+#undef __i915_write
 
-#define I915_READ16(reg)	dev_priv->uncore.funcs.mmio_readw(dev_priv, (reg), true)
-#define I915_WRITE16(reg, val)	dev_priv->uncore.funcs.mmio_writew(dev_priv, (reg), (val), true)
-#define I915_READ16_NOTRACE(reg)	dev_priv->uncore.funcs.mmio_readw(dev_priv, (reg), false)
-#define I915_WRITE16_NOTRACE(reg, val)	dev_priv->uncore.funcs.mmio_writew(dev_priv, (reg), (val), false)
-
-#define I915_READ(reg)		dev_priv->uncore.funcs.mmio_readl(dev_priv, (reg), true)
-#define I915_WRITE(reg, val)	dev_priv->uncore.funcs.mmio_writel(dev_priv, (reg), (val), true)
-#define I915_READ_NOTRACE(reg)		dev_priv->uncore.funcs.mmio_readl(dev_priv, (reg), false)
-#define I915_WRITE_NOTRACE(reg, val)	dev_priv->uncore.funcs.mmio_writel(dev_priv, (reg), (val), false)
-
+#define I915_READ8(reg)			i915_read8(dev_priv, (reg), true)
+#define I915_WRITE8(reg, val)		i915_write8(dev_priv, (reg), (val), true)
+#define I915_READ16(reg)		i915_read16(dev_priv, (reg), true)
+#define I915_WRITE16(reg, val)		i915_write16(dev_priv, (reg), (val), true)
+#define I915_READ16_NOTRACE(reg)	i915_read16(dev_priv, (reg), false)
+#define I915_WRITE16_NOTRACE(reg, val)	i915_write16(dev_priv, (reg), (val), false)
+#define I915_READ(reg)			i915_read32(dev_priv, (reg), true)
+#define I915_WRITE(reg, val)		i915_write32(dev_priv, (reg), (val), true)
+#define I915_READ_NOTRACE(reg)		i915_read32(dev_priv, (reg), false)
+#define I915_WRITE_NOTRACE(reg, val)	i915_write32(dev_priv, (reg), (val), false)
 /* Be very careful with read/write 64-bit values. On 32-bit machines, they
  * will be implemented using 2 32-bit writes in an arbitrary order with
  * an arbitrary delay between them. This can cause the hardware to
  * act upon the intermediate value, possibly leading to corruption and
  * machine death. You have been warned.
  */
-#define I915_WRITE64(reg, val)	dev_priv->uncore.funcs.mmio_writeq(dev_priv, (reg), (val), true)
-#define I915_READ64(reg)	dev_priv->uncore.funcs.mmio_readq(dev_priv, (reg), true)
+#define I915_WRITE64(reg, val)		i915_write64(dev_priv, (reg), (val), true)
+#define I915_READ64(reg)		i915_read64(dev_priv, (reg), true)
+
 
 #define I915_READ64_2x32(lower_reg, upper_reg) ({			\
 	u32 upper, lower, tmp;						\
@@ -3408,9 +3493,63 @@ int intel_freq_opcode(struct drm_i915_private *dev_priv, int val);
  * Note: Should only be used between intel_uncore_forcewake_irqlock() and
  * intel_uncore_forcewake_irqunlock().
  */
-#define I915_READ_FW(reg__) readl(dev_priv->regs + (reg__))
-#define I915_WRITE_FW(reg__, val__) writel(val__, dev_priv->regs + (reg__))
+#define I915_READ_FW(reg__) \
+	(i915_host_mediate ? I915_READ(reg__) : readl(dev_priv->regs + (reg__)))
+
+#define I915_WRITE_FW(reg__, val__) \
+	(i915_host_mediate ? I915_WRITE(reg__, val__) : writel(val__, dev_priv->regs + (reg__)))
+
 #define POSTING_READ_FW(reg__) (void)I915_READ_FW(reg__)
+
+#define GTT_READ32(addr)						\
+({									\
+	off_t reg = (unsigned long)(addr) -				\
+			(unsigned long)(dev_priv->gtt.gsm);		\
+	u32 __ret = 0;							\
+	if (i915_host_mediate)						\
+		vgt_host_read(reg, &__ret, sizeof(u32),			\
+						true, false);		\
+	else								\
+		__ret = readl(addr);					\
+	__ret;								\
+})
+
+#define GTT_READ64(addr)						\
+({									\
+	off_t reg = (unsigned long)(addr) -				\
+			(unsigned long)(dev_priv->gtt.gsm);		\
+	u64 __ret = 0;							\
+	if (i915_host_mediate)						\
+		vgt_host_read(reg, &__ret, sizeof(u64),			\
+						true, false);		\
+	else								\
+		__ret = readq(addr);					\
+	__ret;								\
+})
+
+#define GTT_WRITE32(val, addr)						\
+({									\
+	off_t reg = (unsigned long)(addr) -				\
+			(unsigned long)(dev_priv->gtt.gsm);		\
+	u32 __val = (val);						\
+	if (i915_host_mediate)						\
+		vgt_host_write(reg, &__val, sizeof(u32),		\
+						true, false);		\
+	else								\
+		writel((val), (addr));					\
+})
+
+#define GTT_WRITE64(val, addr)						\
+({									\
+	off_t reg = (unsigned long)(addr) -				\
+			(unsigned long)(dev_priv->gtt.gsm);		\
+	u64 __val = (val);						\
+	if (i915_host_mediate)						\
+		vgt_host_write(reg, &__val, sizeof(u64),		\
+						true, false);		\
+	else								\
+		writeq((val), (addr));					\
+})
 
 /* "Broadcast RGB" property */
 #define INTEL_BROADCAST_RGB_AUTO 0

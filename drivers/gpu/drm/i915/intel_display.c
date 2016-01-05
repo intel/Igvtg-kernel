@@ -44,6 +44,7 @@
 #include <drm/drm_plane_helper.h>
 #include <drm/drm_rect.h>
 #include <linux/dma_remapping.h>
+#include "i915_vgpu.h"
 
 /* Primary plane formats for gen <= 3 */
 static const uint32_t i8xx_primary_formats[] = {
@@ -109,6 +110,18 @@ static void skl_init_scalers(struct drm_device *dev, struct intel_crtc *intel_cr
 static int i9xx_get_refclk(const struct intel_crtc_state *crtc_state,
 			   int num_connectors);
 static void intel_modeset_setup_hw_state(struct drm_device *dev);
+static void intel_crtc_enable_planes(struct drm_crtc *crtc);
+
+static void page_flip_completed(struct intel_crtc *intel_crtc);
+static bool page_flip_finished(struct intel_crtc *crtc);
+
+static struct intel_encoder *intel_find_encoder(struct intel_connector *connector, int pipe)
+{
+	if (!connector->mst_port)
+		return connector->encoder;
+	else
+		return &connector->mst_port->mst_encoders[pipe]->base;
+}
 
 typedef struct {
 	int	min, max;
@@ -2139,6 +2152,44 @@ static void intel_disable_pipe(struct intel_crtc *crtc)
 		intel_wait_for_pipe_off(crtc);
 }
 
+/*
+ * Plane regs are double buffered, going from enabled->disabled needs a
+ * trigger in order to latch.  The display address reg provides this.
+ */
+void intel_flush_primary_plane(struct drm_i915_private *dev_priv,
+			       enum plane plane)
+{
+	struct drm_device *dev = dev_priv->dev;
+	u32 reg = INTEL_INFO(dev)->gen >= 4 ? DSPSURF(plane) : DSPADDR(plane);
+
+	printk("i915: intel_flush_display_plane\n");
+
+	I915_WRITE(reg, I915_READ(reg));
+	POSTING_READ(reg);
+}
+
+/**
+ * intel_enable_primary_hw_plane - enable the primary plane on a given pipe
+ * @plane:  plane to be enabled
+ * @crtc: crtc for the plane
+ *
+ * Enable @plane on @crtc, making sure that the pipe is running first.
+ */
+static void intel_enable_primary_hw_plane(struct drm_plane *plane,
+					  struct drm_crtc *crtc)
+{
+	struct drm_device *dev = plane->dev;
+	struct drm_i915_private *dev_priv = dev->dev_private;
+	struct intel_crtc *intel_crtc = to_intel_crtc(crtc);
+
+	/* If the pipe isn't enabled, we can't pump pixels and may hang */
+	assert_pipe_enabled(dev_priv, intel_crtc->pipe);
+	to_intel_plane_state(plane->state)->visible = true;
+
+	dev_priv->display.update_primary_plane(crtc, plane->fb,
+					       crtc->x, crtc->y);
+}
+
 static bool need_vtd_wa(struct drm_device *dev)
 {
 #ifdef CONFIG_INTEL_IOMMU
@@ -3224,6 +3275,15 @@ static bool intel_crtc_has_pending_flip(struct drm_crtc *crtc)
 
 	spin_lock_irq(&dev->event_lock);
 	pending = to_intel_crtc(crtc)->unpin_work != NULL;
+	/* Re-check the page flip status in vgt as in suspending
+	 * process flip done interrupt may be lost due to vgt_thread
+	 * is frozen before i915_pm_suspend.
+	 */
+	if (intel_vgpu_active(dev) && pending) {
+		pending = !page_flip_finished(intel_crtc);
+		if (!pending)
+			page_flip_completed(intel_crtc);
+	}
 	spin_unlock_irq(&dev->event_lock);
 
 	return pending;
@@ -3538,7 +3598,7 @@ static void gen6_fdi_link_train(struct drm_crtc *crtc)
 	if (i == 4)
 		DRM_ERROR("FDI train 2 fail!\n");
 
-	DRM_DEBUG_KMS("FDI train done.\n");
+	printk("FDI train done.\n");
 }
 
 /* Manual link training for Ivy Bridge A0 parts */
@@ -3579,6 +3639,9 @@ static void ivb_manual_fdi_link_train(struct drm_crtc *crtc)
 		temp &= ~FDI_LINK_TRAIN_PATTERN_MASK_CPT;
 		temp &= ~FDI_RX_ENABLE;
 		I915_WRITE(reg, temp);
+
+		POSTING_READ(reg);
+		udelay(150);
 
 		/* enable CPU FDI TX and PCH FDI RX */
 		reg = FDI_TX_CTL(pipe);
@@ -3621,6 +3684,9 @@ static void ivb_manual_fdi_link_train(struct drm_crtc *crtc)
 			DRM_DEBUG_KMS("FDI train 1 fail on vswing %d\n", j / 2);
 			continue;
 		}
+
+		POSTING_READ(reg);
+		udelay(150);
 
 		/* Train 2 */
 		reg = FDI_TX_CTL(pipe);
@@ -10745,7 +10811,10 @@ void intel_prepare_page_flip(struct drm_device *dev, int plane)
 	 * is also accompanied by a spurious intel_prepare_page_flip().
 	 */
 	spin_lock_irqsave(&dev->event_lock, flags);
-	if (intel_crtc->unpin_work && page_flip_finished(intel_crtc))
+	/* There is case that flip interrupts come early before intel_crtc
+	 * is initalized. Add a sanity check before use it.
+	 */
+	if (intel_crtc && intel_crtc->unpin_work && page_flip_finished(intel_crtc))
 		atomic_inc_not_zero(&intel_crtc->unpin_work->pending);
 	spin_unlock_irqrestore(&dev->event_lock, flags);
 }
@@ -13097,6 +13166,7 @@ static int intel_atomic_commit(struct drm_device *dev,
 void intel_crtc_restore_mode(struct drm_crtc *crtc)
 {
 	struct drm_device *dev = crtc->dev;
+	struct drm_i915_private *dev_priv = dev->dev_private;
 	struct drm_atomic_state *state;
 	struct drm_crtc_state *crtc_state;
 	int ret;
@@ -13126,10 +13196,21 @@ retry:
 		drm_modeset_backoff(state->acquire_ctx);
 		goto retry;
 	}
-
-	if (ret)
+#ifdef DRM_I915_VGT_SUPPORT
+		if (intel_vgpu_active(dev) == true) {
+			/*
+			 * Tell VGT that we have a valid surface to show
+			 * after modesetting. We doesn't distinguish DOM0 and
+			 * Linux guest here, The PVINFO write handler will
+			 * handle this.
+			 */
+			I915_WRITE(vgt_info_off(display_ready), 1);		
+		}
+#endif
+	if (ret) {
 out:
 		drm_atomic_state_free(state);
+	}
 }
 
 #undef for_each_intel_crtc_masked

@@ -1,0 +1,158 @@
+#!/bin/bash
+
+get_port_name() {
+	type=`echo $1|cut -c7-`
+	port_name=`cat $i915_debugfs_dir/i915_display_info|sed -n '/Connector info/,$p'|grep $type|awk '{print $6}'|sed 's/,//g'`
+	if [ x"$port_name" != x"PORT_A" ] && [ x"$port_name" != x"PORT_B" ] &&\
+		[ x"$port_name" != x"PORT_C" ] && [ x"$port_name" != x"PORT_D" ] && [ x"$port_name" != x"PORT_E" ]; then
+		port_name=unknown
+	fi
+}
+
+get_drm_name () {
+	drm_name=card0-`cat $i915_debugfs_dir/i915_display_info|sed -n '/Connector info/,$p'|grep $1|grep $2|awk '{print $4}'|sed 's/,//g'`
+	if [ x"$drm_name" == x"card0-" ]; then
+		drm_name=unknown
+	fi
+}
+
+
+wait_for_edid () {
+	EDID=""
+	for try in 1 2 3 4 5 6 7 8 9 10
+	do
+		EDID=`cat $1`
+		if [ -z "$EDID" ]; then
+			sleep 1;
+		else
+			break;
+		fi
+	done
+
+	if [ -z "$EDID" ]; then
+		echo "Did not get EDID for a connected monitor from $1! Hotplug may not work properly!"
+	fi
+}
+
+vgt_dir=/sys/kernel/vgt
+i915_debugfs_dir=/sys/kernel/debug/dri/64
+
+if [ -e ${i915_debugfs_dir}/i915_display_info ]; then
+	:
+else
+	echo "vGT warning:(vgt_mgr $1 $2 $3) vGT: debugfs node i915_display_info does not exist!" > /dev/kmsg
+fi
+#######################################################################
+############################ --help ###################################
+#######################################################################
+if [ x"$1" == x"--help" ]; then
+	echo Usage: vgt_mgr --command param1 param2
+	exit 0
+fi
+
+
+#######################################################################
+############################ --version ################################
+#######################################################################
+if [ x"$1" == x"--version" ]; then
+	echo 1.0
+	exit 0
+fi
+
+
+#######################################################################
+############################ --get port name ##########################
+#######################################################################
+if [ x"$1" == x"--get-port-name" ]; then
+	get_port_name $2
+	echo $port_name
+	exit 0
+fi
+
+
+#######################################################################
+############################ --get drm name ###########################
+#######################################################################
+if [ x"$1" == x"--get-drm-name" ]; then
+	get_drm_name $2 $3
+	echo $drm_name
+	exit 0
+fi
+
+
+#######################################################################
+############################ --detect display #########################
+#######################################################################
+
+if [ x"$1" == x"--detect-display" ]; then
+	check_src2=0
+	type=0
+	connect=0
+	filelist=`ls $vgt_dir`
+	for guest in $filelist
+	do
+		if [ x"${guest:0:2}" != x"vm" ]; then
+			continue
+		fi
+
+		if [ x"$2" == x"PORT_A" ]; then
+			src1=/sys/class/drm/card0-eDP-1
+			target=$vgt_dir/$guest/PORT_A
+			type=1
+		elif [ x"$2" == x"PORT_B" ]; then
+			get_drm_name $2 DP
+			src1=/sys/class/drm/$drm_name
+			get_drm_name $2 HDMI
+			src2=/sys/class/drm/$drm_name
+			target=$vgt_dir/$guest/PORT_B
+			check_src2=1
+			type=2
+		elif [ x"$2" == x"PORT_C" ]; then
+			get_drm_name $2 DP
+			src1=/sys/class/drm/$drm_name
+			get_drm_name $2 HDMI
+			src2=/sys/class/drm/$drm_name
+			target=$vgt_dir/$guest/PORT_C
+			check_src2=1
+			type=3
+		elif [ x"$2" == x"PORT_D" ]; then
+			get_drm_name $2 DP
+			src1=/sys/class/drm/$drm_name
+			get_drm_name $2 HDMI
+			src2=/sys/class/drm/$drm_name
+			target=$vgt_dir/$guest/PORT_D
+			check_src2=1
+			type=4
+		elif [ x"$2" == x"PORT_E" ]; then
+			src1=/sys/class/drm/card0-VGA-1
+			target=$vgt_dir/$guest/PORT_E
+			type=0
+		fi
+
+		if [ ! -d $target ]; then
+			continue
+		fi
+
+		if [ -d $src1 ] && [ `cat $src1/status` == "connected" ]; then
+			wait_for_edid $src1/edid
+			dd if=$src1/edid of=$target/edid bs=128 count=1
+			echo $type > $target/type
+			connect=1
+		fi
+
+		if [ -d $src2 ] && [ $check_src2 -eq 1 ] && [ `cat $src2/status` == "connected" ]; then
+			wait_for_edid $src2/edid
+			dd if=$src2/edid of=$target/edid bs=128 count=1
+			type=`expr $type + 3`
+			echo $type > $target/type
+			connect=1
+		fi
+
+		if [ $connect -eq 1 ]; then
+			echo "connect" > $target/connection
+		else
+			echo "disconnect" > $target/connection
+		fi
+	done
+	exit 0
+fi

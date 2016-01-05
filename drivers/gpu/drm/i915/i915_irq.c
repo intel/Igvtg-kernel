@@ -45,6 +45,28 @@
  * and related files, but that will be described in separate chapters.
  */
 
+#ifdef DRM_I915_VGT_SUPPORT
+#include "i915_vgpu.h"
+void i915_isr_wrapper(struct irq_work *work)
+{
+	struct drm_i915_private *dev_priv = container_of(work,
+				struct drm_i915_private, irq_work);
+
+	if (!vgt_can_process_irq())
+		return;
+
+	spin_lock(&dev_priv->irq_work_lock);
+	dev_priv->irq_ops.irq_handler(dev_priv->dev->pdev->irq, dev_priv->dev);
+	spin_unlock(&dev_priv->irq_work_lock);
+}
+
+void vgt_schedule_host_isr(struct drm_device *dev)
+{
+	struct drm_i915_private *dev_priv = dev->dev_private;
+	irq_work_queue(&dev_priv->irq_work);
+}
+#endif
+
 static const u32 hpd_ibx[HPD_NUM_PINS] = {
 	[HPD_CRT] = SDE_CRT_HOTPLUG,
 	[HPD_SDVO_B] = SDE_SDVOB_HOTPLUG,
@@ -2820,8 +2842,14 @@ static void i915_hangcheck_elapsed(struct work_struct *work)
 		}
 	}
 
-	if (rings_hung)
-		return i915_handle_error(dev, true, "Ring hung");
+	if (rings_hung) {
+#ifdef DRM_I915_VGT_SUPPORT
+		if (i915_host_mediate && vgt_handle_dom0_device_reset())
+			return;
+#endif
+		i915_handle_error(dev, true, "Ring hung");
+		return;
+	}
 
 	if (busy_count)
 		/* Reset timer case chip hangs without another request
@@ -3011,17 +3039,17 @@ static void ibx_hpd_irq_setup(struct drm_device *dev)
 	if (HAS_PCH_IBX(dev)) {
 		hotplug_irqs = SDE_HOTPLUG_MASK;
 		for_each_intel_encoder(dev, intel_encoder)
-			if (dev_priv->hotplug.stats[intel_encoder->hpd_pin].state == HPD_ENABLED)
+			if (dev_priv->hpd_stats[intel_encoder->hpd_pin].hpd_mark == HPD_ENABLED)
 				enabled_irqs |= hpd_ibx[intel_encoder->hpd_pin];
 	} else if (HAS_PCH_SPT(dev)) {
 		hotplug_irqs = SDE_HOTPLUG_MASK_SPT;
 		for_each_intel_encoder(dev, intel_encoder)
-			if (dev_priv->hotplug.stats[intel_encoder->hpd_pin].state == HPD_ENABLED)
+			if (dev_priv->hpd_stats[intel_encoder->hpd_pin].hpd_mark == HPD_ENABLED)
 				enabled_irqs |= hpd_spt[intel_encoder->hpd_pin];
 	} else {
 		hotplug_irqs = SDE_HOTPLUG_MASK_CPT;
 		for_each_intel_encoder(dev, intel_encoder)
-			if (dev_priv->hotplug.stats[intel_encoder->hpd_pin].state == HPD_ENABLED)
+			if (dev_priv->hpd_stats[intel_encoder->hpd_pin].hpd_mark == HPD_ENABLED)
 				enabled_irqs |= hpd_cpt[intel_encoder->hpd_pin];
 	}
 
@@ -3056,7 +3084,7 @@ static void bxt_hpd_irq_setup(struct drm_device *dev)
 	u32 hotplug_ctrl;
 
 	for_each_intel_encoder(dev, intel_encoder) {
-		if (dev_priv->hotplug.stats[intel_encoder->hpd_pin].state
+		if (dev_priv->hpd_stats[intel_encoder->hpd_pin].hpd_mark
 				== HPD_ENABLED)
 			hotplug_port |= hpd_bxt[intel_encoder->hpd_pin];
 	}
@@ -3145,6 +3173,15 @@ static int ironlake_irq_postinstall(struct drm_device *dev)
 				DE_PLANEA_FLIP_DONE_IVB | DE_AUX_CHANNEL_A_IVB);
 		extra_mask = (DE_PIPEC_VBLANK_IVB | DE_PIPEB_VBLANK_IVB |
 			      DE_PIPEA_VBLANK_IVB | DE_ERR_INT_IVB);
+
+		I915_WRITE(GEN7_ERR_INT, I915_READ(GEN7_ERR_INT));
+
+		/*
+		 * Do not enable ERR_INT for VGT temporarily,
+		 * as VGT doesn't handle this.
+		 */
+		if (intel_vgpu_active(dev))
+			extra_mask &= ~DE_ERR_INT_IVB;
 	} else {
 		display_mask = (DE_MASTER_IRQ_CONTROL | DE_GSE | DE_PCH_EVENT |
 				DE_PLANEA_FLIP_DONE | DE_PLANEB_FLIP_DONE |
@@ -3945,7 +3982,7 @@ static void i915_hpd_irq_setup(struct drm_device *dev)
 	/* Note HDMI and DP share hotplug bits */
 	/* enable bits are the same for all generations */
 	for_each_intel_encoder(dev, intel_encoder)
-		if (dev_priv->hotplug.stats[intel_encoder->hpd_pin].state == HPD_ENABLED)
+		if (dev_priv->hpd_stats[intel_encoder->hpd_pin].hpd_mark == HPD_ENABLED)
 			hotplug_en |= hpd_mask_i915[intel_encoder->hpd_pin];
 	/* Programming the CRT detection parameters tends
 	   to generate a spurious hotplug event about three
@@ -4085,6 +4122,96 @@ static void i965_irq_uninstall(struct drm_device * dev)
 	I915_WRITE(IIR, I915_READ(IIR));
 }
 
+static void intel_hpd_irq_reenable_work(struct work_struct *work)
+{
+	struct drm_i915_private *dev_priv =
+		container_of(work, typeof(*dev_priv),
+			     hotplug_reenable_work.work);
+	struct drm_device *dev = dev_priv->dev;
+	struct drm_mode_config *mode_config = &dev->mode_config;
+	int i;
+
+	intel_runtime_pm_get(dev_priv);
+
+	spin_lock_irq(&dev_priv->irq_lock);
+	for (i = (HPD_NONE + 1); i < HPD_NUM_PINS; i++) {
+		struct drm_connector *connector;
+
+		if (dev_priv->hpd_stats[i].hpd_mark != HPD_DISABLED)
+			continue;
+
+		dev_priv->hpd_stats[i].hpd_mark = HPD_ENABLED;
+
+		list_for_each_entry(connector, &mode_config->connector_list, head) {
+			struct intel_connector *intel_connector = to_intel_connector(connector);
+
+			if (intel_connector->encoder->hpd_pin == i) {
+				if (connector->polled != intel_connector->polled)
+					DRM_DEBUG_DRIVER("Reenabling HPD on connector %s\n",
+							 connector->name);
+				connector->polled = intel_connector->polled;
+				if (!connector->polled)
+					connector->polled = DRM_CONNECTOR_POLL_HPD;
+			}
+		}
+	}
+	if (dev_priv->display.hpd_irq_setup)
+		dev_priv->display.hpd_irq_setup(dev);
+	spin_unlock_irq(&dev_priv->irq_lock);
+
+	intel_runtime_pm_put(dev_priv);
+}
+
+#ifdef CONFIG_I915_VGT
+void *i915_drm_to_pgt(struct drm_device *dev)
+{
+	struct drm_i915_private *dev_priv = dev->dev_private;
+	return dev_priv->pgt;
+}
+
+static void vgt_irq_preinstall(struct drm_device *dev)
+{
+	struct drm_i915_private *dev_priv = dev->dev_private;
+
+	dev_priv->pgt = vgt_init_irq(dev->pdev, dev);
+	if (!dev_priv->pgt) {
+		DRM_DEBUG_DRIVER("vgt_init_irq failed, turn vgt off\n");
+		i915_host_mediate = false;
+
+		dev->driver->irq_handler = dev_priv->irq_ops.irq_handler;
+		dev->driver->irq_preinstall = dev_priv->irq_ops.irq_preinstall;
+		dev->driver->irq_postinstall = dev_priv->irq_ops.irq_postinstall;
+		dev->driver->irq_uninstall = dev_priv->irq_ops.irq_uninstall;
+
+		/* still call it for this time */
+		dev_priv->irq_ops.irq_preinstall(dev);
+
+		return;
+	}
+
+	init_irq_work(&dev_priv->irq_work, i915_isr_wrapper);
+	spin_lock_init(&dev_priv->irq_work_lock);
+
+	dev_priv->irq_ops.irq_preinstall(dev);
+}
+
+static int vgt_irq_postinstall(struct drm_device *dev)
+{
+	struct drm_i915_private *dev_priv = dev->dev_private;
+	return dev_priv->irq_ops.irq_postinstall(dev);
+}
+
+static void vgt_irq_uninstall(struct drm_device *dev)
+{
+	struct drm_i915_private *dev_priv = dev->dev_private;
+	irq_work_sync(&dev_priv->irq_work);
+
+	dev_priv->irq_ops.irq_uninstall(dev);
+
+	vgt_fini_irq(dev->pdev);
+}
+#endif
+
 /**
  * intel_irq_init - initializes irq support
  * @dev_priv: i915 device instance
@@ -4192,6 +4319,22 @@ void intel_irq_init(struct drm_i915_private *dev_priv)
 		dev->driver->enable_vblank = i915_enable_vblank;
 		dev->driver->disable_vblank = i915_disable_vblank;
 	}
+
+#ifdef CONFIG_I915_VGT
+	if (i915_host_mediate) {
+		/* save the original irq ops */
+		dev_priv->irq_ops.irq_handler = dev->driver->irq_handler;
+		dev_priv->irq_ops.irq_preinstall = dev->driver->irq_preinstall;
+		dev_priv->irq_ops.irq_postinstall = dev->driver->irq_postinstall;
+		dev_priv->irq_ops.irq_uninstall = dev->driver->irq_uninstall;
+
+		/* let drm take vgt as hardware interrupt handler */
+		dev->driver->irq_handler = vgt_interrupt;
+		dev->driver->irq_preinstall = vgt_irq_preinstall;
+		dev->driver->irq_postinstall = vgt_irq_postinstall;
+		dev->driver->irq_uninstall = vgt_irq_uninstall;
+	}
+#endif
 }
 
 /**

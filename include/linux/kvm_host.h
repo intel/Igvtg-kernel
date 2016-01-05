@@ -295,6 +295,9 @@ struct kvm_memory_slot {
 	unsigned long userspace_addr;
 	u32 flags;
 	short id;
+#ifdef CONFIG_KVMGT
+	pfn_t *pfn_list;
+#endif
 };
 
 static inline unsigned long kvm_dirty_bitmap_bytes(struct kvm_memory_slot *memslot)
@@ -408,6 +411,16 @@ struct kvm {
 #endif
 	long tlbs_dirty;
 	struct list_head devices;
+
+#ifdef CONFIG_KVMGT
+	int domid;
+	bool vgt_enabled;
+	struct vgt_device *vgt;
+	u32 opregion_gpa;
+	u64 aperture_hpa;
+#define NR_BKT (1 << 18)
+	struct hlist_head ptable[NR_BKT];
+#endif
 };
 
 #define kvm_err(fmt, ...) \

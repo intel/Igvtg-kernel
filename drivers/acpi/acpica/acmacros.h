@@ -44,6 +44,9 @@
 #ifndef __ACMACROS_H__
 #define __ACMACROS_H__
 
+#ifndef ACPI_NO_ERROR_MESSAGES
+#define ACPI_NO_ERROR_MESSAGES
+#endif
 /*
  * Extract data using a pointer. Any more than a byte and we
  * get into potential aligment issues -- see the STORE macros below.

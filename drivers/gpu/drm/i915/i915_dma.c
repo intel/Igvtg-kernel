@@ -828,6 +828,8 @@ static void intel_init_dpio(struct drm_i915_private *dev_priv)
  *   - allocate initial config memory
  *   - setup the DRM framebuffer with the allocated memory
  */
+struct drm_i915_private *gpu_perf_dev_priv;
+
 int i915_driver_load(struct drm_device *dev, unsigned long flags)
 {
 	struct drm_i915_private *dev_priv;
@@ -841,7 +843,8 @@ int i915_driver_load(struct drm_device *dev, unsigned long flags)
 	if (dev_priv == NULL)
 		return -ENOMEM;
 
-	dev->dev_private = dev_priv;
+	dev->dev_private = (void *)dev_priv;
+	gpu_perf_dev_priv = (void *)dev_priv;
 	dev_priv->dev = dev;
 
 	/* Setup the write-once "constant" device info */
@@ -902,6 +905,23 @@ int i915_driver_load(struct drm_device *dev, unsigned long flags)
 	intel_detect_pch(dev);
 
 	intel_uncore_init(dev);
+
+	if (i915_start_vgt(dev->pdev))
+		i915_host_mediate = true;
+	printk("i915_start_vgt: %s\n", i915_host_mediate ? "success" : "fail");
+
+	if (i915_host_mediate) {
+		extern bool (*tmp_vgt_can_process_timer)(void *timer);
+		extern void (*tmp_vgt_new_delay_event_timer)(void *timer);
+
+		tmp_vgt_new_delay_event_timer = vgt_new_delay_event_timer;
+		tmp_vgt_can_process_timer = vgt_can_process_timer;
+	}
+
+	i915_check_vgpu(dev);
+
+	if (intel_vgpu_active(dev))
+		i915.enable_ips = 0;
 
 	/* Load CSR Firmware for SKL */
 	intel_csr_ucode_init(dev);
@@ -974,8 +994,8 @@ int i915_driver_load(struct drm_device *dev, unsigned long flags)
 		goto out_mtrrfree;
 	}
 
-	dev_priv->hotplug.dp_wq = alloc_ordered_workqueue("i915-dp", 0);
-	if (dev_priv->hotplug.dp_wq == NULL) {
+	dev_priv->dp_wq = alloc_ordered_workqueue("i915-dp", 0);
+	if (dev_priv->dp_wq == NULL) {
 		DRM_ERROR("Failed to create our dp workqueue.\n");
 		ret = -ENOMEM;
 		goto out_freewq;
@@ -1072,7 +1092,7 @@ out_gem_unload:
 	pm_qos_remove_request(&dev_priv->pm_qos);
 	destroy_workqueue(dev_priv->gpu_error.hangcheck_wq);
 out_freedpwq:
-	destroy_workqueue(dev_priv->hotplug.dp_wq);
+	destroy_workqueue(dev_priv->dp_wq);
 out_freewq:
 	destroy_workqueue(dev_priv->wq);
 out_mtrrfree:
@@ -1130,6 +1150,11 @@ int i915_driver_unload(struct drm_device *dev)
 
 	intel_modeset_cleanup(dev);
 
+	if (i915_host_mediate) {
+		i915_stop_vgt();
+		i915_host_mediate = false;
+	}
+
 	/*
 	 * free the memory space allocated for the child device
 	 * config parsed from VBT
@@ -1168,7 +1193,7 @@ int i915_driver_unload(struct drm_device *dev)
 	intel_teardown_gmbus(dev);
 	intel_teardown_mchbar(dev);
 
-	destroy_workqueue(dev_priv->hotplug.dp_wq);
+	destroy_workqueue(dev_priv->dp_wq);
 	destroy_workqueue(dev_priv->wq);
 	destroy_workqueue(dev_priv->gpu_error.hangcheck_wq);
 	pm_qos_remove_request(&dev_priv->pm_qos);
@@ -1300,6 +1325,7 @@ const struct drm_ioctl_desc i915_ioctls[] = {
 	DRM_IOCTL_DEF_DRV(I915_GEM_USERPTR, i915_gem_userptr_ioctl, DRM_UNLOCKED|DRM_RENDER_ALLOW),
 	DRM_IOCTL_DEF_DRV(I915_GEM_CONTEXT_GETPARAM, i915_gem_context_getparam_ioctl, DRM_UNLOCKED|DRM_RENDER_ALLOW),
 	DRM_IOCTL_DEF_DRV(I915_GEM_CONTEXT_SETPARAM, i915_gem_context_setparam_ioctl, DRM_UNLOCKED|DRM_RENDER_ALLOW),
+//	DRM_IOCTL_DEF_DRV(I915_GEM_VGTBUFFER, i915_gem_vgtbuffer_ioctl, DRM_UNLOCKED | DRM_RENDER_ALLOW),
 };
 
 int i915_max_ioctl = ARRAY_SIZE(i915_ioctls);
