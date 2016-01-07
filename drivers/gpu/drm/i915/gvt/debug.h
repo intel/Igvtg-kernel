@@ -76,6 +76,7 @@ enum {
 	GVT_DBG_EDID = (1 << 5),
 	GVT_DBG_EL = (1 << 6),
 	GVT_DBG_SCHED = (1 << 7),
+	GVT_DBG_CMD = (1 << 8),
 };
 
 #define gvt_dbg_core(fmt, args...) \
@@ -95,5 +96,8 @@ enum {
 
 #define gvt_dbg_sched(fmt, args...) \
 	gvt_dbg(GVT_DBG_SCHED, fmt, ##args)
+
+#define gvt_dbg_cmd(fmt, args...) \
+	gvt_dbg(GVT_DBG_CMD, fmt, ##args)
 
 #endif

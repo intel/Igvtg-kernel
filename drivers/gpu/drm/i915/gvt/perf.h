@@ -36,6 +36,8 @@ struct gvt_statistics {
 	u64	gtt_mmio_wcnt;
 	u64	gtt_mmio_wcycles;
 	u64	gtt_mmio_rcycles;
+	u64	vring_scan_cnt;
+	u64	vring_scan_cycles;
 	u64	wp_cnt;
 	u64	wp_cycles;
 	u64	ppgtt_wp_cnt;
@@ -48,6 +50,7 @@ struct gvt_statistics {
 	u64	gpt_find_hit_cycles;
 	u64	gpt_find_miss_cnt;
 	u64	gpt_find_miss_cycles;
+	u64	skip_bb_cnt;
 
 };
 

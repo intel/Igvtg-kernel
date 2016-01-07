@@ -55,7 +55,7 @@ struct gvt_workload {
 	/* execlist context information */
 	struct execlist_ctx_descriptor_format ctx_desc;
 	struct execlist_ring_context *ring_context;
-	unsigned long rb_head, rb_tail, rb_ctl, rb_start;
+	unsigned long rb_head, rb_tail, rb_ctl, rb_start, rb_len;
 
 	struct gvt_mm *shadow_mm;
 
@@ -63,6 +63,9 @@ struct gvt_workload {
 	bool (*complete)(struct gvt_workload *);
 
 	struct list_head list;
+
+	DECLARE_BITMAP(pending_events, GVT_EVENT_MAX);
+	void *shadow_ring_buffer_va;
 };
 
 #define workload_q_head(vgt, ring_id) \

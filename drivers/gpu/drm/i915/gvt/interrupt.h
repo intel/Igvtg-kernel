@@ -250,4 +250,8 @@ void gvt_trigger_virtual_event(struct vgt_device *vgt,
 	enum gvt_event_type event);
 void gvt_inject_flip_done(struct vgt_device *vgt, int pipe);
 
+int gvt_ring_id_to_pipe_control_notify_event(int ring_id);
+int gvt_ring_id_to_mi_flush_dw_event(int ring_id);
+int gvt_ring_id_to_mi_user_interrupt_event(int ring_id);
+
 #endif /* _GVT_INTERRUPT_H_ */

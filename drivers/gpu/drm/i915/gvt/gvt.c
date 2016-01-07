@@ -283,6 +283,7 @@ static bool init_service_thread(struct pgt_device *pdev)
 static void clean_pgt_device(struct pgt_device *pdev)
 {
 	clean_service_thread(pdev);
+	gvt_clean_cmd_parser(pdev);
 	gvt_clean_workload_scheduler(pdev);
 	gvt_clean_control_interface(pdev);
 	gvt_clean_gtt(pdev);
@@ -318,6 +319,9 @@ static bool init_pgt_device(struct pgt_device *pdev, struct drm_i915_private *de
 		goto err;
 
 	if (!gvt_setup_control_interface(pdev))
+		goto err;
+
+	if (!gvt_init_cmd_parser(pdev))
 		goto err;
 
 	if (!init_service_thread(pdev))

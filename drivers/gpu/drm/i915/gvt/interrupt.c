@@ -124,6 +124,55 @@ char *gvt_irq_name[GVT_EVENT_MAX] = {
 	[GVT_EVENT_RESERVED] = "RESERVED EVENTS!!!",
 };
 
+struct ring_id_to_cmd_interrupt_event {
+	int pipe_control_notify;
+	int mi_flush_dw;
+	int mi_user_interrupt;
+};
+
+struct ring_id_to_cmd_interrupt_event ring_id_to_cmd_interrupt_event[] = {
+	[RCS] = {
+		.pipe_control_notify = RCS_PIPE_CONTROL,
+		.mi_flush_dw = GVT_EVENT_RESERVED,
+		.mi_user_interrupt = RCS_MI_USER_INTERRUPT,
+	},
+	[BCS] = {
+		.pipe_control_notify = GVT_EVENT_RESERVED,
+		.mi_flush_dw = BCS_MI_FLUSH_DW,
+		.mi_user_interrupt = BCS_MI_USER_INTERRUPT,
+	},
+	[VCS] = {
+		.pipe_control_notify = GVT_EVENT_RESERVED,
+		.mi_flush_dw = VCS_MI_FLUSH_DW,
+		.mi_user_interrupt = VCS_MI_USER_INTERRUPT,
+	},
+	[VCS2] = {
+		.pipe_control_notify = GVT_EVENT_RESERVED,
+		.mi_flush_dw = VCS2_MI_FLUSH_DW,
+		.mi_user_interrupt = VCS2_MI_USER_INTERRUPT,
+	},
+	[VECS] = {
+		.pipe_control_notify = GVT_EVENT_RESERVED,
+		.mi_flush_dw = VECS_MI_FLUSH_DW,
+		.mi_user_interrupt = VECS_MI_USER_INTERRUPT,
+	},
+};
+
+int gvt_ring_id_to_pipe_control_notify_event(int ring_id)
+{
+	return ring_id_to_cmd_interrupt_event[ring_id].pipe_control_notify;
+}
+
+int gvt_ring_id_to_mi_flush_dw_event(int ring_id)
+{
+	return ring_id_to_cmd_interrupt_event[ring_id].mi_flush_dw;
+}
+
+int gvt_ring_id_to_mi_user_interrupt_event(int ring_id)
+{
+	return ring_id_to_cmd_interrupt_event[ring_id].mi_user_interrupt;
+}
+
 static inline struct gvt_irq_info *regbase_to_irq_info(struct pgt_device *pdev,
 		unsigned int reg)
 {

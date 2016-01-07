@@ -46,6 +46,7 @@
 #include "scheduler.h"
 #include "sched_policy.h"
 #include "render.h"
+#include "cmd_parser.h"
 
 #define GVT_MAX_VGPU 8
 
@@ -228,6 +229,8 @@ struct pgt_device {
 	struct gvt_device_control control;
 
 	struct gvt_workload_scheduler workload_scheduler;
+
+	DECLARE_HASHTABLE(cmd_table, GVT_CMD_HASH_BITS);
 };
 
 /* request types to wake up main thread */

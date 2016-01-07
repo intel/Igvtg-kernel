@@ -145,6 +145,11 @@ static bool dispatch_workload(struct gvt_workload *workload)
 
 	mutex_lock(&pdev->lock);
 
+	if (!gvt_scan_and_shadow_workload(workload)) {
+		workload->status = -EINVAL;
+		goto err;
+	}
+
 	if (!populate_shadow_context(workload)) {
 		workload->status = -EINVAL;
 		goto err;
@@ -309,6 +314,7 @@ static void complete_current_workload(struct pgt_device *pdev, int ring_id)
 {
 	struct gvt_workload_scheduler *scheduler = &pdev->workload_scheduler;
 	struct gvt_workload *workload;
+	int event;
 
 	mutex_lock(&pdev->lock);
 
@@ -318,6 +324,9 @@ static void complete_current_workload(struct pgt_device *pdev, int ring_id)
 		wait_event(workload->shadow_ctx_status_wq,
 				!atomic_read(&workload->shadow_ctx_active));
 		update_guest_context(workload);
+
+		for_each_set_bit(event, workload->pending_events, GVT_EVENT_MAX)
+			gvt_trigger_virtual_event(workload->vgt, event);
 	}
 
 	if (workload->req)
