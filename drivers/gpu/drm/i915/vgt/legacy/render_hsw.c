@@ -37,6 +37,7 @@ vgt_reg_t vgt_gen7_render_regs[] = {
 	BLT_HWS_PGA_GEN7,
 	RENDER_HWS_PGA_GEN7,
 	BSD_HWS_PGA_GEN7,
+	VEBOX_HWS_PGA_GEN7,
 	_REG_VECS_HWS_PGA,
 
 	_REG_BCS_MI_MODE,

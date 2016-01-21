@@ -47,12 +47,13 @@ struct vgt_device *vmid_2_vgt_device(int vmid)
 
 static int allocate_vgt_id(struct pgt_device *pdev)
 {
+	struct vgt_device_info *info = &pdev->device_info;
 	unsigned long bit_index;
 
 	ASSERT(vgt_id_alloc_bitmap != ~0UL)
 	do {
 		bit_index = ffz (vgt_id_alloc_bitmap);
-		if (bit_index >= (IS_BDW(pdev) ? VGT_MAX_VMS : VGT_MAX_VMS_HSW)) {
+		if (bit_index >= info->max_support_vms) {
 			vgt_err("vGT: allocate_vgt_id() failed\n");
 			return -ENOSPC;
 		}

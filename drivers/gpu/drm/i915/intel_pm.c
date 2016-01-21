@@ -4553,7 +4553,21 @@ void gen6_rps_idle(struct drm_i915_private *dev_priv)
 		else
 			gen6_set_rps(dev_priv->dev, dev_priv->rps.idle_freq);
 		dev_priv->rps.last_adj = 0;
-		I915_WRITE(GEN6_PMINTRMSK, 0xffffffff);
+		/* mask the rps interrupts before the next boost submission
+		 * with vgt disabled.
+		 * in vgt, only dom0 can access the pm reference registers,
+		 * but dom0 i915 driver don't know there is or not unfinished
+		 * submission from DomU. it will deal as idle after the last
+		 * submission from itself is finished. gpu will run with low
+		 * freq if no more boost submission from dom0.
+		 * remove the mask of rps interrupts when run into idle
+		 * state(not really gpu idle) with vgt enabled, ensure the
+		 * gpu freq also can be adjusted when only work loading
+		 * from domU.
+		 * this trick will be removed later when host mediation is
+		 * removed. */
+		if (!i915_host_mediate)
+			I915_WRITE(GEN6_PMINTRMSK, 0xffffffff);
 	}
 	mutex_unlock(&dev_priv->rps.hw_lock);
 

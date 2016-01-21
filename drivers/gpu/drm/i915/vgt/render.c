@@ -214,6 +214,10 @@ vgt_reg_t vgt_gen9_render_regs[] = {
 	GEN8_PRIVATE_PAT + 4,
 
 	0x7004,
+	0x7008,
+	0x2580,
+	0x7034,
+	0xb118,
 	0x7014,
 	0x7300,
 	0xe100,
