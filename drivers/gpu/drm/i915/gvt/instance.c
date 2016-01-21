@@ -162,6 +162,7 @@ static bool create_virtual_gm_state(struct vgt_device *vgt,
 
 static void destroy_virtual_device_state(struct vgt_device *vgt)
 {
+	gvt_clean_virtual_display_state(vgt);
 	gvt_clean_vgtt(vgt);
 	destroy_virtual_mmio_state(vgt);
 	destroy_virtual_gm_state(vgt);
@@ -178,6 +179,9 @@ static bool create_virtual_device_state(struct vgt_device *vgt,
 		return false;
 
 	init_virtual_cfg_space_state(vgt, info);
+
+	if (!gvt_init_virtual_display_state(vgt))
+		return false;
 
 	return true;
 }

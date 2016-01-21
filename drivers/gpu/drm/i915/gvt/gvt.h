@@ -40,6 +40,8 @@
 #include "cfg_space.h"
 #include "opregion.h"
 #include "fb_decoder.h"
+#include "edid.h"
+#include "display.h"
 
 #define GVT_MAX_VGPU 8
 
@@ -123,11 +125,18 @@ struct gvt_virtual_gm_state {
 	struct gvt_gm_node node;
 };
 
+struct gvt_virtual_display_state {
+	struct gvt_i2c_edid_t   gvt_i2c_edid;
+	struct gt_port          ports[I915_MAX_PORTS];
+	struct sbi_registers sbi_regs;
+};
+
 struct gvt_virtual_device_state {
 	struct gvt_virtual_gm_state gm;
 	struct gvt_virtual_mmio_state mmio;
 	struct gvt_virtual_cfg_state cfg;
 	struct gvt_virtual_opregion_state opregion;
+	struct gvt_virtual_display_state display;
 };
 
 struct gvt_uevent {
@@ -675,6 +684,9 @@ bool gvt_default_mmio_write(struct vgt_device *vgt, unsigned int offset, void *p
 
 bool register_mmio_handler(struct pgt_device *pdev, unsigned int start, int bytes,
 	gvt_mmio_handler_t read, gvt_mmio_handler_t write);
+
+bool gvt_update_display_events_emulation(struct pgt_device *pdev);
+void gvt_emulate_display_events(struct pgt_device *pdev);
 
 #include "mpt.h"
 

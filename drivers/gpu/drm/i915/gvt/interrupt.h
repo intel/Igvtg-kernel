@@ -165,6 +165,7 @@ enum gvt_irq_type {
 };
 
 #define GVT_IRQ_BITWIDTH	32
+#define GVT_DPY_EMUL_PERIOD	16000000	// 16 ms for now
 
 /* device specific interrupt bit definitions */
 struct gvt_irq_info {
@@ -199,6 +200,11 @@ struct gvt_irq_map {
 	u32 down_irq_bitmask;
 };
 
+struct gvt_emul_timer {
+	struct hrtimer timer;
+	u64 period;
+};
+
 /* structure containing device specific IRQ state */
 struct gvt_irq_state {
 	struct gvt_irq_ops *ops;
@@ -206,6 +212,7 @@ struct gvt_irq_state {
 	DECLARE_BITMAP(irq_info_bitmap, GVT_IRQ_INFO_MAX);
 	struct gvt_event_info	events[GVT_EVENT_MAX];
 	DECLARE_BITMAP(pending_events, GVT_EVENT_MAX);
+	struct gvt_emul_timer dpy_timer;
 	struct gvt_irq_map *irq_map;
 };
 

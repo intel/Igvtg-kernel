@@ -571,6 +571,9 @@ union _TRANS_CONFIG
 #define _PCH_GMBUS0			0xc5100
 #define _PCH_GMBUS1			0xc5104
 #define _PCH_GMBUS2			0xc5108
+#define _PCH_GMBUS3			0xc510c
+#define _PCH_GMBUS4			0xc5110
+#define _PCH_GMBUS5			0xc5120
 
 #define _GEN6_GDRST			0x941c
 #define _GEN6_GT_THREAD_STATUS_REG	0x13805c

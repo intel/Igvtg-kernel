@@ -242,6 +242,12 @@ static int gvt_service_thread(void *data)
 			gvt_dpy_ready_uevent_handler(pdev);
 		}
 
+		if (test_and_clear_bit(GVT_REQUEST_EMUL_DPY_EVENTS,
+					(void *)&pdev->service_request)) {
+			mutex_lock(&pdev->lock);
+			gvt_emulate_display_events(pdev);
+			mutex_unlock(&pdev->lock);
+		}
 
 		if (r) {
 			gvt_warn("service thread is waken up by unexpected signal.");

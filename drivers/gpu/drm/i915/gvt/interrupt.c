@@ -598,12 +598,29 @@ static void gvt_init_events(
 	}
 }
 
+static enum hrtimer_restart gvt_dpy_timer_fn(struct hrtimer *data)
+{
+	struct gvt_emul_timer *dpy_timer;
+	struct gvt_irq_state *state;
+	struct pgt_device *pdev;
+
+	dpy_timer = container_of(data, struct gvt_emul_timer, timer);
+	state = container_of(dpy_timer, struct gvt_irq_state, dpy_timer);
+	pdev = gvt_irq_state_to_pdev(state);
+
+	gvt_raise_request(pdev, GVT_REQUEST_EMUL_DPY_EVENTS);
+
+	hrtimer_add_expires_ns(&dpy_timer->timer, dpy_timer->period);
+	return HRTIMER_RESTART;
+}
+
 /*
  * Do interrupt initialization for vGT driver
  */
 bool gvt_irq_init(struct pgt_device *pdev)
 {
 	struct gvt_irq_state *state = &pdev->irq_state;
+	struct gvt_emul_timer *dpy_timer;
 
 	gvt_dbg_core("init irq framework");
 
@@ -623,12 +640,19 @@ bool gvt_irq_init(struct pgt_device *pdev)
 
 	gvt_irq_map_init(state);
 
+	dpy_timer = &state->dpy_timer;
+	hrtimer_init(&dpy_timer->timer, CLOCK_MONOTONIC, HRTIMER_MODE_ABS);
+	dpy_timer->timer.function = gvt_dpy_timer_fn;
+	dpy_timer->period = GVT_DPY_EMUL_PERIOD;
+
 	return true;
 }
 
 void gvt_irq_exit(struct pgt_device *pdev)
 {
-	return;
+	struct gvt_irq_state *state = &pdev->irq_state;
+
+	hrtimer_cancel(&state->dpy_timer.timer);
 }
 
 void gvt_inject_flip_done(struct vgt_device *vgt, int pipe)
