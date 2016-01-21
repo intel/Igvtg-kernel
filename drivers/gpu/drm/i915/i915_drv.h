@@ -3238,6 +3238,9 @@ int i915_gem_context_getparam_ioctl(struct drm_device *dev, void *data,
 int i915_gem_context_setparam_ioctl(struct drm_device *dev, void *data,
 				    struct drm_file *file_priv);
 
+int i915_gem_gvtbuffer_ioctl(struct drm_device *dev, void *data,
+			     struct drm_file *file);
+
 /* i915_gem_evict.c */
 int __must_check i915_gem_evict_something(struct drm_device *dev,
 					  struct i915_address_space *vm,
