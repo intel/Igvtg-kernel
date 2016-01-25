@@ -1077,7 +1077,6 @@ static int bxt_resume_prepare(struct drm_i915_private *dev_priv)
 	 */
 	broxton_init_cdclk(dev);
 	broxton_ddi_phy_init(dev);
-	intel_prepare_ddi(dev);
 
 	return 0;
 }
@@ -1336,8 +1335,8 @@ static int vlv_wait_for_gt_wells(struct drm_i915_private *dev_priv,
 		return 0;
 
 	DRM_DEBUG_KMS("waiting for GT wells to go %s (%08x)\n",
-			wait_for_on ? "on" : "off",
-			I915_READ(VLV_GTLC_PW_STATUS));
+		      onoff(wait_for_on),
+		      I915_READ(VLV_GTLC_PW_STATUS));
 
 	/*
 	 * RC6 transitioning can be delayed up to 2 msec (see
@@ -1346,7 +1345,7 @@ static int vlv_wait_for_gt_wells(struct drm_i915_private *dev_priv,
 	err = wait_for(COND, 3);
 	if (err)
 		DRM_ERROR("timeout waiting for GT wells to go %s\n",
-			  wait_for_on ? "on" : "off");
+			  onoff(wait_for_on));
 
 	return err;
 #undef COND
@@ -1357,7 +1356,7 @@ static void vlv_check_no_gt_access(struct drm_i915_private *dev_priv)
 	if (!(I915_READ(VLV_GTLC_PW_STATUS) & VLV_GTLC_ALLOWWAKEERR))
 		return;
 
-	DRM_ERROR("GT register access while GT waking disabled\n");
+	DRM_DEBUG_DRIVER("GT register access while GT waking disabled\n");
 	I915_WRITE(VLV_GTLC_PW_STATUS, VLV_GTLC_ALLOWWAKEERR);
 }
 
@@ -1501,6 +1500,10 @@ static int intel_runtime_suspend(struct device *device)
 
 	enable_rpm_wakeref_asserts(dev_priv);
 	WARN_ON_ONCE(atomic_read(&dev_priv->pm.wakeref_count));
+
+	if (intel_uncore_arm_unclaimed_mmio_detection(dev_priv))
+		DRM_ERROR("Unclaimed access detected prior to suspending\n");
+
 	dev_priv->pm.suspended = true;
 
 	/*
@@ -1549,6 +1552,8 @@ static int intel_runtime_resume(struct device *device)
 
 	intel_opregion_notify_adapter(dev, PCI_D0);
 	dev_priv->pm.suspended = false;
+	if (intel_uncore_unclaimed_mmio(dev_priv))
+		DRM_DEBUG_DRIVER("Unclaimed access during suspend, bios?\n");
 
 	intel_guc_resume(dev);
 

@@ -1635,6 +1635,9 @@ enum skl_disp_power_wells {
 #define   RING_WAIT		(1<<11) /* gen3+, PRBx_CTL */
 #define   RING_WAIT_SEMAPHORE	(1<<10) /* gen6+ */
 
+#define RING_FORCE_TO_NONPRIV(base, i) _MMIO(((base)+0x4D0) + (i)*4)
+#define   RING_MAX_NONPRIV_SLOTS  12
+
 #define GEN7_TLB_RD_ADDR	_MMIO(0x4700)
 
 #if 0
@@ -1710,6 +1713,11 @@ enum skl_disp_power_wells {
 
 #define FPGA_DBG		_MMIO(0x42300)
 #define   FPGA_DBG_RM_NOCLAIM	(1<<31)
+
+#define CLAIM_ER		_MMIO(VLV_DISPLAY_BASE + 0x2028)
+#define   CLAIM_ER_CLR		(1 << 31)
+#define   CLAIM_ER_OVERFLOW	(1 << 16)
+#define   CLAIM_ER_CTR_MASK	0xffff
 
 #define DERRMR		_MMIO(0x44050)
 /* Note that HBLANK events are reserved on bdw+ */
@@ -5987,8 +5995,14 @@ enum skl_disp_power_wells {
 #define SKL_DFSM_CDCLK_LIMIT_450	(2 << 23)
 #define SKL_DFSM_CDCLK_LIMIT_337_5	(3 << 23)
 
+#define GEN7_FF_SLICE_CS_CHICKEN1	_MMIO(0x20e0)
+#define   GEN9_FFSC_PERCTX_PREEMPT_CTRL	(1<<14)
+
 #define FF_SLICE_CS_CHICKEN2			_MMIO(0x20e4)
 #define  GEN9_TSG_BARRIER_ACK_DISABLE		(1<<8)
+
+#define GEN9_CS_DEBUG_MODE1		_MMIO(0x20ec)
+#define GEN8_CS_CHICKEN1		_MMIO(0x2580)
 
 /* GEN7 chicken */
 #define GEN7_COMMON_SLICE_CHICKEN1		_MMIO(0x7010)
@@ -6034,6 +6048,8 @@ enum skl_disp_power_wells {
 #define  HDC_FORCE_CONTEXT_SAVE_RESTORE_NON_COHERENT	(1<<5)
 #define  HDC_FORCE_NON_COHERENT			(1<<4)
 #define  HDC_BARRIER_PERFORMANCE_DISABLE	(1<<10)
+
+#define GEN8_HDC_CHICKEN1			_MMIO(0x7304)
 
 /* GEN9 chicken */
 #define SLICE_ECO_CHICKEN0			_MMIO(0x7308)
