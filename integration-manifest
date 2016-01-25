@@ -1,0 +1,26 @@
+origin/drm-intel-fixes 92e963f50fc74041b5e9e744c330dca48e04f08d
+	Linux 4.5-rc1
+drm-upstream/drm-fixes 3bea6a4c7895fc94965a219a8da9bcf753667901
+	Merge branch 'linux-4.4' of git://github.com/skeggsb/linux into drm-fixes
+origin/drm-intel-next-fixes 48ea1e32c39db94c59b63580b965222c7782112f
+	drm/i915/gen9: Set PIN_ZONE_4G end to 4GB - 1 page
+origin/drm-intel-next-queued 1803c035efb88afb9d3e7feb279ac29a83216382
+	drm/i915: Fix context/engine cleanup order
+drm-upstream/drm-next 1df59b8497f47495e873c23abd6d3d290c730505
+	Merge tag 'drm-intel-next-fixes-2016-01-14' of git://anongit.freedesktop.org/drm-intel into drm-next
+sound-upstream/for-next 92e963f50fc74041b5e9e744c330dca48e04f08d
+	Linux 4.5-rc1
+sound-upstream/for-linus 92e963f50fc74041b5e9e744c330dca48e04f08d
+	Linux 4.5-rc1
+origin/topic/drm-fixes 5481c8fb1da2a573861095fbea078f30c664d0bd
+	drm/atomic-helper: Check encoder/crtc constraints
+origin/topic/drm-misc 09859d2a3c2090ae2452cbf1c8fdde30ba38d934
+	drm/crtc-helper: Add caveat to disable_unused_functions doc
+origin/topic/kerneldoc 418645fdcc72b92df6817ec249e216700baa757a
+	drm: Enable markdown^Wasciidoc for gpu.tmpl
+origin/topic/crc-pmic 04cbfe68c3190f23bcfec230bfd832b533f35554
+	mfd: Add GPIOLIB dependency if INTEL_SOC_PMIC is to be enabled
+origin/topic/connector-locking 3fdefa399e4644399ce3e74e65a75122d52dba6a
+	drm: gc now dead mode_group code
+origin/topic/core-for-CI 527e9316f8ec44bd53d90fb9f611fa7ffff52bb9
+	Linux 4.4-rc4
