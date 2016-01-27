@@ -2399,22 +2399,24 @@ populate_lr_context(struct intel_context *ctx, struct drm_i915_gem_object *ctx_o
 	ASSIGN_CTX_REG(reg_state, CTX_PDP0_UDW, GEN8_RING_PDP_UDW(ring, 0), 0);
 	ASSIGN_CTX_REG(reg_state, CTX_PDP0_LDW, GEN8_RING_PDP_LDW(ring, 0), 0);
 
-	if (USES_FULL_48BIT_PPGTT(ppgtt->base.dev)) {
-		/* 64b PPGTT (48bit canonical)
-		 * PDP0_DESCRIPTOR contains the base address to PML4 and
-		 * other PDP Descriptors are ignored.
-		 */
-		ASSIGN_CTX_PML4(ppgtt, reg_state);
-	} else {
-		/* 32b PPGTT
-		 * PDP*_DESCRIPTOR contains the base address of space supported.
-		 * With dynamic page allocation, PDPs may not be allocated at
-		 * this point. Point the unallocated PDPs to the scratch page
-		 */
-		ASSIGN_CTX_PDP(ppgtt, reg_state, 3);
-		ASSIGN_CTX_PDP(ppgtt, reg_state, 2);
-		ASSIGN_CTX_PDP(ppgtt, reg_state, 1);
-		ASSIGN_CTX_PDP(ppgtt, reg_state, 0);
+	if (!ctx->gvt_context) {
+		if (USES_FULL_48BIT_PPGTT(ppgtt->base.dev)) {
+			/* 64b PPGTT (48bit canonical)
+			 * PDP0_DESCRIPTOR contains the base address to PML4 and
+			 * other PDP Descriptors are ignored.
+			 */
+			ASSIGN_CTX_PML4(ppgtt, reg_state);
+		} else {
+			/* 32b PPGTT
+			 * PDP*_DESCRIPTOR contains the base address of space supported.
+			 * With dynamic page allocation, PDPs may not be allocated at
+			 * this point. Point the unallocated PDPs to the scratch page
+			 */
+			ASSIGN_CTX_PDP(ppgtt, reg_state, 3);
+			ASSIGN_CTX_PDP(ppgtt, reg_state, 2);
+			ASSIGN_CTX_PDP(ppgtt, reg_state, 1);
+			ASSIGN_CTX_PDP(ppgtt, reg_state, 0);
+		}
 	}
 
 	if (ring->id == RCS) {
