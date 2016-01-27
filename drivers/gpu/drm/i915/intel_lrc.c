@@ -2569,7 +2569,9 @@ int intel_lr_context_deferred_alloc(struct intel_context *ctx,
 	ctx->engine[ring->id].ringbuf = ringbuf;
 	ctx->engine[ring->id].state = ctx_obj;
 
-	if (ctx != ctx->i915->kernel_context && ring->init_context) {
+	if (ctx != ctx->i915->kernel_context &&
+		!ctx->gvt_context && ring->init_context) {
+
 		struct drm_i915_gem_request *req;
 
 		req = i915_gem_request_alloc(ring, ctx);
