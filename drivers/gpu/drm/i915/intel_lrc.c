@@ -449,6 +449,9 @@ static void execlists_context_unqueue(struct intel_engine_cs *ring)
 				 execlist_link) {
 		if (!req0) {
 			req0 = cursor;
+			/* single submission for gvt context */
+			if (req0->ctx->gvt_context)
+				break;
 		} else if (req0->ctx == cursor->ctx) {
 			/* Same ctx: ignore first request, as second request
 			 * will update tail past first request's workload */
@@ -457,7 +460,9 @@ static void execlists_context_unqueue(struct intel_engine_cs *ring)
 				       &ring->execlist_retired_req_list);
 			req0 = cursor;
 		} else {
-			req1 = cursor;
+			if (!cursor->ctx->gvt_context)
+				req1 = cursor;
+
 			break;
 		}
 	}
@@ -484,6 +489,11 @@ static void execlists_context_unqueue(struct intel_engine_cs *ring)
 
 	WARN_ON(req1 && req1->elsp_submitted);
 
+	if (req0->ctx->gvt_context) {
+		struct intel_context *ctx = req0->ctx;
+		ctx->gvt_context_schedule_in(ctx->gvt_context_private_data[ring->id]);
+	}
+
 	execlists_submit_requests(req0, req1);
 }
 
@@ -504,6 +514,10 @@ static bool execlists_check_remove_request(struct intel_engine_cs *ring,
 			     "Never submitted head request\n");
 
 			if (--head_req->elsp_submitted <= 0) {
+				if (head_req->ctx->gvt_context) {
+					struct intel_context *ctx = head_req->ctx;
+					ctx->gvt_context_schedule_out(ctx->gvt_context_private_data[ring->id]);
+				}
 				list_move_tail(&head_req->execlist_link,
 					       &ring->execlist_retired_req_list);
 				return true;
