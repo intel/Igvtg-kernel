@@ -1,5 +1,5 @@
 	Intel® GVT-g Setup Guide
-		Oct, 2015
+		Jan, 2016
 
 Contents
 
@@ -16,6 +16,8 @@ Contents
     .       3.3.1 For KVMGT
     .       3.3.2 For XenGT
     .   3.4 Grub Setup
+    .       3.4.1 For XenGT
+    .       3.4.2 For KVMGT
     .   3.5 Host Setup
     .       3.5.1 Build Graphic Stack (for the 5th Generation)
     .       3.5.2 Configuring Remote Control
@@ -70,7 +72,7 @@ Contents
 
 2.2 Hardware Requirements
 
-   4th or 5th Generation Intel® Core Processor Graphics is required.
+   4th, 5th(support XenGT/KVMGT) or 6th(support XenGT) Generation Intel® Core Processor Graphics is required.
 
 2.3 Software Requirements
 
@@ -96,14 +98,14 @@ Contents
 
    For XenGT:
 
-	Kernel: https://github.com/01org/igvtg-kernel (2015q3-3.18.0 branch)
-	Xen: https://github.com/01org/igvtg-xen (2015q3-4.5 branch)
-	Qemu: https://github.com/01org/igvtg-qemu (xengt_public2015q3 branch)
+	Kernel: https://github.com/01org/igvtg-kernel (2015q4-4.2.0 branch)
+	Xen: https://github.com/01org/igvtg-xen (2015q4-4.5 branch)
+	Qemu: https://github.com/01org/igvtg-qemu (xengt_public2015q4 branch)
 
    For KVMGT:
 
-	Kernel: https://github.com/01org/igvtg-kernel (2015q3-3.18.0 branch)
-	Qemu: https://github.com/01org/igvtg-qemu (kvmgt_public2015q3 branch)
+	Kernel: https://github.com/01org/igvtg-kernel (2015q4-4.2.0 branch)
+	Qemu: https://github.com/01org/igvtg-qemu (kvmgt_public2015q4 branch)
 
 
 3.2 Build Kernel
@@ -116,16 +118,20 @@ Contents
 
 	# git clone https://github.com/01org/igvtg-kernel kernel_src
 	# cd kernel_src/
-	# git checkout 2015q3-3.18.0
-	# cp config-3.18.0-host .config
+	# git checkout 2015q4-4.2.0
+	# cp config-4.2.0-host .config
 	# make -j8 && make modules_install
-	# mkinitramfs -o /boot/initrd.img -v 3.18.0-rc7-vgt-2015q3+
-	# cp arch/x86/boot/bzImage /boot/vmlinuz-3.18.0
+   For XenGT Legacy environment: 
+	# mkinitramfs -o /boot/initrd.img -v 4.2.0-rc8-vgt+
+	# cp arch/x86/boot/bzImage /boot/vmlinuz-4.2.0
+   For XenGT UEFI environment:
+	# mkinitramfs -o /boot/efi/EFI/ubuntu/initrd.img -v 4.2.0-rc8-vgt+
+	# cp arch/x86/boot/bzImage /boot/efi/EFI/ubuntu/vmlinuz-4.2.0
 	# cp vgt.rules /etc/udev/rules.d
 	# chmod a+x vgt_mgr
 	# cp vgt_mgr /usr/bin
-
-   Note, the above listed module name '3.18.0-rc7-vgt-2015q3+' matches the one under
+ 
+   Note, the above listed module name '4.2.0-rc8-vgt+' matches the one under
    /lib/modules/ directory.
 
 
@@ -133,60 +139,75 @@ Contents
 
 3.3.1 For KVMGT
 
-	# git clone https://github.com/01org/ igvtg-qemu -b kvmgt_public2015q3 qemu_src
+	# git clone https://github.com/01org/igvtg-qemu -b kvmgt_public2015q4 qemu_src
 	# cd qemu_src/
 	# git submodule update --init dtc
 	# git submodule update --init roms/seabios
-	# ./configure -prefix=/usr \
+	# ./configure --prefix=/usr \
 			--enable-kvm \
 			--enable-sdl \
+			--disable-werror \
 			--target-list=x86_64-softmmu
 	# make -j8
 	# cd roms/seabios
 	# LC_ALL=C make -j8
 	# cd -
-	# ln -sf `pwd`/x86_64-softmmu/qemu-system-x86_64 /usr/bin/qemu-system-x86-64
-	# ln -sf `pwd`/roms/seabios/out/bios.bin /usr/bin/bios.bin
+	# make install
 
 3.3.2 For XenGT
 
 	# git clone https://github.com/01org/igvtg-xen xen_src
 	# cd xen_src/
-	# git clone https://github.com/01org/igvtg-qemu.git -b xengt_public2015q3 qemu-xen
+	# git checkout 2015q4-4.5 
+	# git clone https://github.com/01org/igvtg-qemu.git -b xengt_public2015q4 qemu-xen
 	# cp -r qemu-xen/ tools/
 	# sed -i '/QEMU_UPSTREAM_URL/s:http\://xenbits.xen.org/git-http/qemu-upstream-4.5-testing.git:$(XEN_ROOT)/tools/qemu-xen:' Config.mk
 	# sed -i '/QEMU_UPSTREAM_URL/s:git\://xenbits.xen.org/qemu-upstream-4.5-testing.git:$(XEN_ROOT)/tools/qemu-xen:' Config.mk
 	# ./autogen.sh
-	# ./configure --prefix=/usr  # XEN4.5 changes the default path to /usr/local
+	# ./configure --prefix=/usr  # XEN4.5 default path is /usr/local
 	# make -j8 xen tools
+   For Legacy BIOS environment:
 	# cp xen/xen.gz /boot/xen-vgt.gz
+   For UEFI BIOS environment:
+	# cp xen/xen.efi /boot/efi/EFI/ubuntu/xen.efi
 	# make install-tools PYTHON_PREFIX_ARG=
 
 
 3.4 Grub Setup
 
-   You need manually add a new grub entry in /boot/grub/grub.cfg and make
+   You need manually add a new grub entry in /boot/grub/grub.cfg(for legacy BIOS) or /boot/efi/EFI/ubuntu/xen.cfg(for UEFI BIOS) and make
    the entry as the default one when booting. Below is the example grub
    entries.
 
+3.4.1 For XenGT: 
+   For Legacy BIOS environment:
 	UUID (2e01a442-d848-4695-b031-9296ce3105b1) and root partition (hd0, msdos1) below are just reference which should be updated according to the user's environment.
-	menuentry 'XenGT 3.18.0' --class ubuntu --class gnu-linux --class gnu --class os {
+	menuentry 'XenGT 4.2.0' --class ubuntu --class gnu-linux --class gnu --class os {
 	    insmod part_msdos
 	    insmod ext2
 	    set root='(hd0,msdos1)'
 	    search --no-floppy --fs-uuid --set=root 2e01a442-d848-4695-b031-9296ce3105b1
 	    multiboot   /boot/xen-vgt.gz dom0_mem=2048M loglvl=all guest_loglvl=all conring_size=4M noreboot
-	    module  /boot/vmlinuz-3.18.0 root=UUID=2e01a442-d848-4695-b031-9296ce3105b1 rw rd_NO_LUKS rd_NO_LVM LANG=en_US.UTF-8 rd_NO_MD SYSFONT=latarcyrheb-sun16 rhgb crashkernel=auto KEYBOARDTYPE=pc KEYTABLE=us rd_NO_DM ignore_loglevel console=tty0 console=hvc0 consoleblank=0 log_buf_len=4M i915.hvm_boot_foreground=1
-	module  /boot/initrd.img
+	    module  /boot/vmlinuz-4.2.0 root=UUID=2e01a442-d848-4695-b031-9296ce3105b1 rw rd_NO_LUKS rd_NO_LVM LANG=en_US.UTF-8 rd_NO_MD SYSFONT=latarcyrheb-sun16 rhgb crashkernel=auto KEYBOARDTYPE=pc KEYTABLE=us rd_NO_DM ignore_loglevel console=tty0 console=hvc0 consoleblank=0 log_buf_len=4M i915.hvm_boot_foreground=1 i915.enable_cmd_parser=0
+	    module  /boot/initrd.img
 	}
+   For UEFI BIOS environment:
+	[global]
+	default=gvt-g
+	[gvt-g]
+	options=dom0_mem=2048M loglvl=all guest_loglvl=all conring_size=4M noreboot
+	kernel=vmlinuz-4.2.0 root=UUID=2e01a442-d848-4695-b031-9296ce3105b1 rw rd_NO_LUKS rd_NO_LVM LANG=en_US.UTF-8 rd_NO_MD SYSFONT=latarcyrheb-sun16 rhgb crashkernel=auto KEYBOARDTYPE=pc KEYTABLE=us rd_NO_DM ignore_loglevel console=tty0 console=hvc0 consoleblank=0 log_buf_len=4M i915.hvm_boot_foreground=1 i915.enable_cmd_parser=0
+	ramdisk=initrd.img
 
-	menuentry 'KVMGT-3.18.0' --class ubuntu --class gnu-linux --class gnu --class os {
+
+3.4.2 For KVMGT:
+	menuentry 'KVMGT-4.2.0' --class ubuntu --class gnu-linux --class gnu --class os {
 	    insmod part_msdos
 	    insmod ext2
 	    set root='(hd0,msdos1)'
 	    search --no-floppy --fs-uuid --set=root 2e01a442-d848-4695-b031-9296ce3105b1
-	    linux   /boot/vmlinuz-3.18.0 root=UUID=2e01a442-d848-4695-b031-9296ce3105b1 intel_iommu=igfx_off loglvl=all guest_loglvl=all conring_size=4M noreboot
-	initrd  /boot/initrd.img
+	    linux   /boot/vmlinuz-4.2.0 root=UUID=2e01a442-d848-4695-b031-9296ce3105b1 intel_iommu=igfx_off i915.hvm_boot_foreground=1 i915.enable_cmd_parser=0 loglvl=all guest_loglvl=all conring_size=4M noreboot
+	    initrd  /boot/initrd.img
 	}
 
    Note: 'intel_iommu=igfx_off' option is a hack for KVMGT, we will try to
@@ -214,10 +235,10 @@ Contents
 
 	# update-rc.d xencommons defaults
 
-3.5.1 Build Graphic Stack (for the 5th Generation)
+3.5.1 Build Graphic Stack (for the 5th and 6th Generation)
 
    If you want to run lightdm well in Host/VM, the user mode 2D driver
-   update is required to support 5th Generation Intel® Core Processor Graphics.
+   update is required to support 5th and 6th Generation Intel® Core Processor Graphics.
 
 	# git clone git://anongit.freedesktop.org/git/xorg/driver/xf86-video-intel
 	# cd xf86-video-intel
@@ -276,6 +297,7 @@ Contents
    Assume that you have an Ubuntu x86_64 14.04 image. You could update the
    kernel and user mode drivers in guest image with following commands:
 
+	# modprobe loop
 	# kpartx -a -v /path/to/ubuntu14.04.img
 
    The output will be something like below:
@@ -297,9 +319,9 @@ Contents
    Alternatively, you could copy the kernel/initrd and modules from host
    to guest directly:
 
-	# cp /boot/vmlinuz-3.18.0 /mnt/boot/
+	# cp /boot/vmlinuz-4.2.0 /mnt/boot/
 	# cp /boot/initrd.img /mnt/boot/
-	# cp -r /lib/modules/3.18.0* /mnt/lib/modules
+	# cp -r /lib/modules/4.2.0* /mnt/lib/modules
 
    Then you could run commands as below to fresh the guest image:
 
@@ -317,10 +339,10 @@ Contents
    Assume you have already install the Windows Guest. You can get the
    Windows driver from Intel website:
 
-	Windows driver version: 15.36.4294
+	Windows driver version: 15.40.4352
 	32-bits/64-bits:
 
-   This driver support both 4th Gen and 5th Gen.
+   This driver support both 5th Gen and 6th Gen.
    After installing the driver, a system reboot is required.
 
 4 VM Life Cycle Management
@@ -391,11 +413,10 @@ Contents
 	# /usr/bin/qemu-system-x86_64 -m 2048 -smp 2 \
 	-enable-kvm \
 	-M pc -machine kernel_irqchip=on \
-	-bios /usr/bin/bios.bin \
 	-hda /path/to/Guest_OS.img \
 	-net nic -net tap,script=/path/to/qemu-ifup \
 	-vgt -vga vgt -vgt_low_gm_sz 128 \
-	-vgt_high_gm_sz 256 -vgt_fence_sz 4
+	-vgt_high_gm_sz 384 -vgt_fence_sz 4
 
 
    The description of the KVMGT-specific parameters(Don't set them before you
@@ -415,6 +436,23 @@ Contents
 	| -vgt_fence_sz        | The number of the fence registers, default is 4 |
 	+----------------------+-------------------------------------------------+
 
+    Note:
+	You need create qemu-ifup file in the /path/to/qemu-ifup.
+	add below info to /path/to/qemu-ifup
+	#!/bin/bash
+
+        switch=$(brctl show| sed -n 2p |awk '{print $1}')
+
+        if [ -n $switch ];then
+                tunctl -u `whoami` -t $1
+                ip link set $1 up
+                /sbin/ifconfig $1 0.0.0.0 up
+                brctl addif $switch $1
+                exit 0
+        else
+                echo Error: no interface specified
+                exit 1
+        fi
 
 4.1.3 Indirect Display Mode
 
