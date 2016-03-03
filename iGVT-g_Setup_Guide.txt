@@ -121,16 +121,19 @@ Contents
 	# git checkout 2015q4-4.2.0
 	# cp config-4.2.0-host .config
 	# make -j8 && make modules_install
-   For XenGT Legacy environment: 
-	# mkinitramfs -o /boot/initrd.img -v 4.2.0-rc8-vgt+
-	# cp arch/x86/boot/bzImage /boot/vmlinuz-4.2.0
-   For XenGT UEFI environment:
-	# mkinitramfs -o /boot/efi/EFI/ubuntu/initrd.img -v 4.2.0-rc8-vgt+
-	# cp arch/x86/boot/bzImage /boot/efi/EFI/ubuntu/vmlinuz-4.2.0
+
+	For Legacy environment:
+		# mkinitramfs -o /boot/initrd.img -v 4.2.0-rc8-vgt+
+		# cp arch/x86/boot/bzImage /boot/vmlinuz-4.2.0
+
+	For UEFI environment:
+		# mkinitramfs -o /boot/efi/EFI/ubuntu/initrd.img -v 4.2.0-rc8-vgt+
+		# cp arch/x86/boot/bzImage /boot/efi/EFI/ubuntu/vmlinuz-4.2.0
+
 	# cp vgt.rules /etc/udev/rules.d
 	# chmod a+x vgt_mgr
 	# cp vgt_mgr /usr/bin
- 
+
    Note, the above listed module name '4.2.0-rc8-vgt+' matches the one under
    /lib/modules/ directory.
 
