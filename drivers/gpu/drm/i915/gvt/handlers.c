@@ -1032,7 +1032,7 @@ static bool pvinfo_write(struct vgt_device *vgt, unsigned int offset,
 			if (!invalid_event)
 				gvt_dpy_stat_notify(vgt);
 
-				break;
+			break;
 		case _vgtif_reg(g2v_notify):
 				if (val == VGT_G2V_SET_POINTER_SHAPE) {
 					struct gvt_fb_notify_msg msg;
