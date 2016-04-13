@@ -108,6 +108,7 @@ typedef uint64_t gen8_ppgtt_pml4e_t;
 #define GEN8_PTE_MASK			0x1ff
 #define GEN8_LEGACY_PDPES		4
 #define GEN8_PTES			I915_PTES(sizeof(gen8_pte_t))
+#define GEN8_PDES			(PAGE_SIZE / (sizeof(gen8_pde_t)))
 
 #define I915_PDPES_PER_PDP(dev) (USES_FULL_48BIT_PPGTT(dev) ?\
 				 GEN8_PML4ES_PER_PML4 : GEN8_LEGACY_PDPES)

@@ -109,6 +109,13 @@ i915_gem_wait_for_error(struct i915_gpu_error *error)
 	return 0;
 }
 
+int i915_wait_error_work_complete(struct drm_device *dev)
+{
+       struct drm_i915_private *dev_priv = dev->dev_private;
+
+       return i915_gem_wait_for_error(&dev_priv->gpu_error);
+}
+
 int i915_mutex_lock_interruptible(struct drm_device *dev)
 {
 	struct drm_i915_private *dev_priv = dev->dev_private;
@@ -146,8 +153,15 @@ i915_gem_get_aperture_ioctl(struct drm_device *dev, void *data,
 			pinned += vma->node.size;
 	mutex_unlock(&dev->struct_mutex);
 
-	args->aper_size = dev_priv->gtt.base.total;
-	args->aper_available_size = args->aper_size - pinned;
+	if (!intel_vgpu_active(dev)) {
+		args->aper_size = dev_priv->gtt.base.total;
+		args->aper_available_size = args->aper_size - pinned;
+#if IS_ENABLED(CONFIG_I915_VGT)
+	} else {
+		args->aper_size = dev_priv->mm.vgt_low_gm_size + dev_priv->mm.vgt_high_gm_size;
+		args->aper_available_size = dev_priv->mm.vgt_low_gm_size + dev_priv->mm.vgt_high_gm_size - pinned;
+#endif
+	}
 
 	return 0;
 }
@@ -3265,12 +3279,14 @@ static int __i915_vma_unbind(struct i915_vma *vma, bool wait)
 	}
 
 	drm_mm_remove_node(&vma->node);
+
 	i915_gem_vma_destroy(vma);
 
 	/* Since the unbound list is global, only move to that list if
 	 * no more VMAs exist. */
-	if (list_empty(&obj->vma_list))
+	if (list_empty(&obj->vma_list)) {
 		list_move_tail(&obj->global_list, &dev_priv->mm.unbound_list);
+	}
 
 	/* And finally now the object is completely decoupled from this vma,
 	 * we can drop its hold on the backing storage and allow it to be
@@ -3477,6 +3493,12 @@ search_free:
 					       flags);
 		if (ret == 0)
 			goto search_free;
+
+		DRM_ERROR("fail to allocate space from %s GM space, size: %u.\n",
+				obj->map_and_fenceable ? "low" : "whole",
+				size);
+
+		dump_stack();
 
 		goto err_free_vma;
 	}
@@ -4504,6 +4526,7 @@ struct i915_vma *i915_gem_obj_to_ggtt_view(struct drm_i915_gem_object *obj,
 void i915_gem_vma_destroy(struct i915_vma *vma)
 {
 	struct i915_address_space *vm = NULL;
+
 	WARN_ON(vma->node.allocated);
 
 	/* Keep the vma as a placeholder in the execbuffer reservation lists */
@@ -4752,7 +4775,7 @@ i915_gem_init_hw(struct drm_device *dev)
 	}
 
 	/* We can't enable contexts until all firmware is loaded */
-	if (HAS_GUC_UCODE(dev)) {
+	if (HAS_GUC_UCODE(dev) && !intel_vgpu_active(dev)) {
 		ret = intel_guc_ucode_load(dev);
 		if (ret) {
 			/*
@@ -4768,7 +4791,8 @@ i915_gem_init_hw(struct drm_device *dev)
 			if (ret)
 				goto out;
 		}
-	}
+	} else
+		i915.enable_guc_submission = false;
 
 	/*
 	 * Increment the next seqno by 0x100 so we have a visible break

@@ -230,6 +230,7 @@ typedef struct _drm_i915_sarea {
 #define DRM_I915_GEM_USERPTR		0x33
 #define DRM_I915_GEM_CONTEXT_GETPARAM	0x34
 #define DRM_I915_GEM_CONTEXT_SETPARAM	0x35
+#define DRM_I915_GEM_VGTBUFFER          0x36
 
 #define DRM_IOCTL_I915_INIT		DRM_IOW( DRM_COMMAND_BASE + DRM_I915_INIT, drm_i915_init_t)
 #define DRM_IOCTL_I915_FLUSH		DRM_IO ( DRM_COMMAND_BASE + DRM_I915_FLUSH)
@@ -283,6 +284,7 @@ typedef struct _drm_i915_sarea {
 #define DRM_IOCTL_I915_GEM_USERPTR			DRM_IOWR (DRM_COMMAND_BASE + DRM_I915_GEM_USERPTR, struct drm_i915_gem_userptr)
 #define DRM_IOCTL_I915_GEM_CONTEXT_GETPARAM	DRM_IOWR (DRM_COMMAND_BASE + DRM_I915_GEM_CONTEXT_GETPARAM, struct drm_i915_gem_context_param)
 #define DRM_IOCTL_I915_GEM_CONTEXT_SETPARAM	DRM_IOWR (DRM_COMMAND_BASE + DRM_I915_GEM_CONTEXT_SETPARAM, struct drm_i915_gem_context_param)
+#define DRM_IOCTL_I915_GEM_VGTBUFFER		DRM_IOWR(DRM_COMMAND_BASE + DRM_I915_GEM_VGTBUFFER, struct drm_i915_gem_vgtbuffer)
 
 /* Allow drivers to submit batchbuffers directly to hardware, relying
  * on the security mechanisms provided by hardware.
@@ -858,6 +860,7 @@ struct drm_i915_gem_caching {
 #define I915_TILING_NONE	0
 #define I915_TILING_X		1
 #define I915_TILING_Y		2
+#define I915_TILING_YF          3
 
 #define I915_BIT_6_SWIZZLE_NONE		0
 #define I915_BIT_6_SWIZZLE_9		1
@@ -1129,6 +1132,43 @@ struct drm_i915_gem_context_param {
 #define I915_CONTEXT_PARAM_NO_ZEROMAP	0x2
 #define I915_CONTEXT_PARAM_GTT_SIZE	0x3
 	__u64 value;
+};
+
+struct drm_i915_gem_vgtbuffer {
+        __u32 vmid;
+	__u32 plane_id;
+#define I915_VGT_PLANE_PRIMARY 1
+#define I915_VGT_PLANE_SPRITE 2
+#define I915_VGT_PLANE_CURSOR 3
+	__u32 pipe_id;
+	__u32 phys_pipe_id;
+	__u8  enabled;
+	__u8  tiled;
+	__u32 bpp;
+	__u32 hw_format;
+	__u32 drm_format;
+	__u32 start;
+	__u32 x_pos;
+	__u32 y_pos;
+	__u32 x_offset;
+	__u32 y_offset;
+	__u32 size;
+	__u32 width;
+	__u32 height;
+	__u32 stride;
+	__u64 user_ptr;
+	__u32 user_size;
+	__u32 flags;
+#define I915_VGTBUFFER_READ_ONLY (1<<0)
+#define I915_VGTBUFFER_QUERY_ONLY (1<<1)
+#define I915_VGTBUFFER_CHECK_CAPABILITY (1<<2)
+#define I915_VGTBUFFER_UNSYNCHRONIZED 0x80000000
+	/**
+	 * Returned handle for the object.
+	 *
+	 * Object handles are nonzero.
+	 */
+	__u32 handle;
 };
 
 #endif /* _UAPI_I915_DRM_H_ */

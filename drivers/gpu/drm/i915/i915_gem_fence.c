@@ -592,6 +592,12 @@ i915_gem_detect_bit_6_swizzle(struct drm_device *dev)
 				swizzle_y = I915_BIT_6_SWIZZLE_NONE;
 			}
 		}
+		/* FIXME: Linux and Windows have different swizzling setting
+		 * which would cause trouble. Now hardcode Linux side to sync
+		 * with Windows side. Need better cleanup in the future
+		 */
+		swizzle_x = I915_BIT_6_SWIZZLE_9_10;
+		swizzle_y = I915_BIT_6_SWIZZLE_9;
 	} else if (IS_GEN5(dev)) {
 		/* On Ironlake whatever DRAM config, GPU always do
 		 * same swizzling setup.

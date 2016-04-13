@@ -44,6 +44,9 @@
 #ifndef __ACOUTPUT_H__
 #define __ACOUTPUT_H__
 
+#ifndef ACPI_NO_ERROR_MESSAGES
+#define ACPI_NO_ERROR_MESSAGES
+#endif
 /*
  * Debug levels and component IDs. These are used to control the
  * granularity of the output of the ACPI_DEBUG_PRINT macro -- on a

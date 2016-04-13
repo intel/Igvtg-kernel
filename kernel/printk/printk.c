@@ -416,6 +416,9 @@ static u32 truncate_msg(u16 *text_len, u16 *trunc_msg_len,
 	return msg_used_size(*text_len + *trunc_msg_len, 0, pad_len);
 }
 
+/* define below macro in order to get hvm's log in serial console for VGT */
+#define HVM_OUTPUT_HACK
+
 /* insert record into the buffer, discard old ones, update heads */
 static int log_store(int facility, int level,
 		     enum log_flags flags, u64 ts_nsec,
@@ -423,7 +426,7 @@ static int log_store(int facility, int level,
 		     const char *text, u16 text_len)
 {
 	struct printk_log *msg;
-	u32 size, pad_len;
+	u32 size, pad_len, i;
 	u16 trunc_msg_len = 0;
 
 	/* number of '\0' padding bytes to next message */
@@ -451,12 +454,22 @@ static int log_store(int facility, int level,
 	/* fill message */
 	msg = (struct printk_log *)(log_buf + log_next_idx);
 	memcpy(log_text(msg), text, text_len);
+#ifdef HVM_OUTPUT_HACK
+	for (i = 0; i < text_len; ++ i) {
+		outb(text[i], 0xe9);
+	}
+#endif
 	msg->text_len = text_len;
 	if (trunc_msg_len) {
 		memcpy(log_text(msg) + text_len, trunc_msg, trunc_msg_len);
 		msg->text_len += trunc_msg_len;
 	}
 	memcpy(log_dict(msg), dict, dict_len);
+#ifdef HVM_OUTPUT_HACK
+	for (i = 0; i < dict_len; ++ i) {
+		outb(dict[i], 0xe9);
+	}
+#endif
 	msg->dict_len = dict_len;
 	msg->facility = facility;
 	msg->level = level & 7;
@@ -466,6 +479,11 @@ static int log_store(int facility, int level,
 	else
 		msg->ts_nsec = local_clock();
 	memset(log_dict(msg) + dict_len, 0, pad_len);
+#ifdef HVM_OUTPUT_HACK
+	for (i = 0; i < pad_len; ++ i) {
+		outb(0, 0xe9);
+	}
+#endif
 	msg->len = size;
 
 	/* insert message */
@@ -1791,9 +1809,13 @@ asmlinkage int vprintk_emit(int facility, int level,
 
 		if (stored)
 			printed_len += text_len;
-		else
+		else {
 			printed_len += log_store(facility, level, lflags, 0,
 						 dict, dictlen, text, text_len);
+#ifdef HVM_OUTPUT_HACK
+			outb('\n', 0xe9);
+#endif
+		}
 	}
 
 	logbuf_cpu = UINT_MAX;

@@ -42,6 +42,13 @@
 #include <linux/vgaarb.h>
 #include <linux/export.h>
 
+#ifdef CONFIG_I915_VGT
+bool (*tmp_vgt_can_process_timer)(void *timer) = NULL;
+void (*tmp_vgt_new_delay_event_timer)(void *timer) = NULL;
+EXPORT_SYMBOL(tmp_vgt_can_process_timer);
+EXPORT_SYMBOL(tmp_vgt_new_delay_event_timer);
+#endif
+
 /* Access macro for slots in vblank timestamp ringbuffer. */
 #define vblanktimestamp(dev, pipe, count) \
 	((dev)->vblank[pipe].time[(count) % DRM_VBLANKTIME_RBSIZE])
@@ -290,6 +297,12 @@ static void vblank_disable_fn(unsigned long arg)
 	if (!dev->vblank_disable_allowed)
 		return;
 
+#ifdef CONFIG_I915_VGT
+	if (tmp_vgt_new_delay_event_timer &&
+			!tmp_vgt_can_process_timer(&vblank->disable_timer))
+		return;
+#endif
+
 	spin_lock_irqsave(&dev->vbl_lock, irqflags);
 	if (atomic_read(&vblank->refcount) == 0 && vblank->enabled) {
 		DRM_DEBUG("disabling vblank on crtc %u\n", pipe);
@@ -359,6 +372,10 @@ int drm_vblank_init(struct drm_device *dev, unsigned int num_crtcs)
 		init_waitqueue_head(&vblank->queue);
 		setup_timer(&vblank->disable_timer, vblank_disable_fn,
 			    (unsigned long)vblank);
+#ifdef CONFIG_I915_VGT
+		if (tmp_vgt_new_delay_event_timer)
+			tmp_vgt_new_delay_event_timer(&vblank->disable_timer);
+#endif
 	}
 
 	DRM_INFO("Supports vblank timestamp caching Rev 2 (21.10.2013).\n");
