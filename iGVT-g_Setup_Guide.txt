@@ -30,6 +30,7 @@ Contents
     .       4.1.1 For XenGT, prepare the xlexample.hvm
     .       4.1.2 For KVMGT
     .       4.1.3 Indirect Display Mode
+    .       4.1.4 Qemu Compositor Display Mode
     5 Control Interfaces
     .   5.1 Display Switch
     .   5.2 Virtual Hotplug (Indirect display mode)
@@ -135,7 +136,10 @@ Contents
 	# make -j8 && make modules_install
 	# mkinitramfs -o /boot/initrd.img -v 4.3.0-rc6-vgt+
 	# cp arch/x86/boot/bzImage /boot/vmlinuz-4.3.0
- 
+        # cp vgt.rules /etc/udev/rules.d
+	# chmod a+x vgt_mgr
+	# cp vgt_mgr /usr/bin
+
    Note, the above listed module name '4.3.0-rc6-vgt+' matches the one under
    /lib/modules/ directory.
 
@@ -483,10 +487,22 @@ Contents
 	and then use xl create xlexample.hvm to boot the Guest.
 
    For KVMGT,
-
-	Add '-vgt_monitor_config_file /path/to/monitor.config' to the Guest boot up
+   
+         Add '-vgt_monitor_config_file /path/to/monitor.config' to the Guest boot up
 	command.
 
+4.1.4 Qemu Compositor Display Mode
+
+   Note, please set parameter "i915.hvm_boot_foreground=0" and add "i915.enable_vgtbuffer=1" in kernel grub command line,if not, you need to manually switch from Guest to host.
+
+         a. Install the needed packages into host:
+              # apt-get install libegl1-mesa-dev -y
+              # apt-get install libudev-dev -y
+   For XenGT,
+         b. In xlexample.hvm, specify vnc=0, sdl=1
+			  
+   For KVMGT,
+         b. Add "-display sdl" parameter to the Guest boot up command.
 
 
 5 Control Interfaces
