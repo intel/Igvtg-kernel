@@ -1,0 +1,589 @@
+	Intel® GVT-g Setup Guide
+		Apr, 2016
+
+Contents
+
+    1 Introduction
+    2 System Requirements
+    .   2.1 Operating System Requirements
+    .   2.2 Hardware Requirements
+    .   2.3 Software Requirements
+    .       2.3.1 Install Basic Packages in Ubuntu
+    3 Build and Install Instructions
+    .   3.1 Source Repositories
+    .   3.2 Build Kernel
+    .   3.3 Build Hypervisor and Device model
+    .       3.3.1 For KVMGT
+    .       3.3.2 For XenGT
+    .   3.4 Grub Setup
+    .       3.4.1 For XenGT
+    .       3.4.2 For KVMGT
+    .   3.5 Host Setup
+    .       3.5.1 Build Graphics Stack (for the 5th and 6th Generation)
+    .       3.5.2 Configuring Remote Control
+    .   3.6 Guest Setup
+    .       3.6.1 Linux Guest Setup
+    .           3.6.1.1 Kernel and Modules Update
+    .       3.6.2 Windows Guest Setup
+    4 VM Life Cycle Management
+    .   4.1 Guest Creation
+    .       4.1.1 For XenGT, prepare the xlexample.hvm
+    .       4.1.2 For KVMGT
+    .       4.1.3 Indirect Display Mode
+    .       4.1.4 Qemu Compositor Display Mode
+    5 Control Interfaces
+    .   5.1 Display Switch
+    .   5.2 Virtual Hotplug (Indirect display mode)
+    6 Features Supported
+    .   6.1 Per-VM Features
+    .   6.2 Virtualization Features
+
+
+
+
+
+
+
+1 Introduction
+
+   Intel® Graphics Virtualization Technology -g is a full GPU
+   virtualization solution with mediated pass-through support starting
+   from 4th Generation Intel Core processors with Intel Graphics
+   processors.
+
+   A virtual GPU instance is maintained for each virtual machine, with
+   performance-critical resources directly assigned. Running a native
+   graphics driver inside a VM(without hypervisor intervention in
+   performance critical paths) optimizes resources among the performance,
+   feature, and sharing capabilities.
+
+   Xen is currently supported on Intel Processor Graphics(a.k.a. XenGT);
+   experimental code is in development that is intended to support iGVT-g
+   running on a KVM hypervisor(a.k.a KVMGT).
+
+   Currently, XenGT/KVMGT supports 3 accelerated VMs running together.
+   We've verified the functionality using the 64-bit version of Ubuntu 14.04.
+
+2 System Requirements
+
+2.1 Operating System Requirements
+
+   The build and install environment has been validated in using x86_64
+   Ubuntu 14.04 as host.
+
+2.2 Hardware Requirements
+
+   4th, 5th or 6th Generation Intel® Core Processor Graphics is required.
+
+
+               4th   5th  6th
+        XenGT  X     X    X
+        KVMGT  X     X    [1]
+
+
+    [1] KVMGT and XenGT share the platform-specific code, so theoretically
+        it should work on 6th CPU as well. However, please be aware that
+        we didn't officially have it tested or supported yet.
+
+
+2.3 Software Requirements
+
+2.3.1 Install Basic Packages in Ubuntu
+
+	# apt-get update
+	# apt-get install libarchive-dev libghc-bzlib-dev libpci-dev \
+	zlib1g-dev mercurial gettext bcc iasl uuid-dev libncurses5-dev \
+	kpartx bc libperl-dev libgtk2.0-dev libc6-dev-i386 libaio-dev \
+	libsdl1.2-dev nfs-common libyajl-dev libx11-dev autoconf  \
+	libtool xsltproc bison flex xutils-dev xserver-xorg-dev \
+	x11proto-gl-dev libx11-xcb-dev vncviewer libxcb-glx0 \
+	libxcb-glx0-dev libxcb-dri2-0-dev libxcb-xfixes0-dev \
+	bridge-utils python-dev bin86 git vim libssl-dev \
+	tightvncserver ssh texinfo -y
+
+
+3 Build and Install Instructions
+
+3.1 Source Repositories
+
+   XenGT and KVMGT share the same kernel and qemu repository.
+
+   For XenGT:
+
+	Kernel: https://github.com/01org/igvtg-kernel (2016q1-4.3.0 branch)
+	Qemu: https://github.com/01org/igvtg-qemu (2016q1-2.3.0 branch)
+	Xen: https://github.com/01org/igvtg-xen (2016q1-4.6 branch)
+
+   For KVMGT:
+
+	Kernel: https://github.com/01org/igvtg-kernel (2016q1-4.3.0 branch)
+	Qemu: https://github.com/01org/igvtg-qemu (2016q1-2.3.0 branch)
+
+
+3.2 Build Kernel
+
+   Note: Add two lines to /etc/initramfs-tools/modules before you building
+   the kernel:
+
+		xengt
+		kvm
+
+   Note: for UEFI environment, use grubx64.efi instead of xen.efi to load system
+	# git clone https://github.com/01org/igvtg-kernel kernel_src
+	# cd kernel_src/
+	# git checkout 2016q1-4.3.0
+	# cp config-4.3.0-host .config
+	# make -j8 && make modules_install
+	# mkinitramfs -o /boot/initrd.img -v 4.3.0-rc6-vgt+
+	# cp arch/x86/boot/bzImage /boot/vmlinuz-4.3.0
+        # cp vgt.rules /etc/udev/rules.d
+	# chmod a+x vgt_mgr
+	# cp vgt_mgr /usr/bin
+
+   Note, the above listed module name '4.3.0-rc6-vgt+' matches the one under
+   /lib/modules/ directory.
+
+
+3.3 Build Hypervisor and Device model
+
+3.3.1 For KVMGT
+
+	# git clone https://github.com/01org/igvtg-qemu -b 2016q1-2.3.0 qemu_src
+	# cd qemu_src/
+	# git submodule update --init dtc
+	# git submodule update --init roms/seabios
+	# ./configure --prefix=/usr \
+			--enable-kvm \
+			--enable-sdl \
+			--disable-werror \
+			--target-list=x86_64-softmmu
+	# make -j8
+	# cd roms/seabios
+	# LC_ALL=C make -j8
+	# cd -
+	# make install
+
+3.3.2 For XenGT
+
+	# git clone https://github.com/01org/igvtg-xen xen_src
+	# cd xen_src/
+	# git checkout 2016q1-4.6
+	# git clone https://github.com/01org/igvtg-qemu.git -b 2016q1-2.3.0 qemu-xen
+	# cp -r qemu-xen/ tools/
+	# sed -i '/QEMU_UPSTREAM_URL/s:http\://xenbits.xen.org/git-http/qemu-upstream-4.6-testing.git:$(XEN_ROOT)/tools/qemu-xen:' Config.mk
+	# sed -i '/QEMU_UPSTREAM_URL/s:git\://xenbits.xen.org/qemu-upstream-4.6-testing.git:$(XEN_ROOT)/tools/qemu-xen:' Config.mk
+	# ./autogen.sh
+	# ./configure --prefix=/usr  # XEN4.6 default path is /usr/local
+	# make -j8 xen tools
+	# cp xen/xen.gz /boot/xen-vgt.gz
+
+
+3.4 Grub Setup
+
+   You need manually add a new grub entry in /boot/grub/grub.cfg and make
+   the entry as the default one when booting. Below is the example grub
+   entries.
+
+3.4.1 For XenGT: 
+	UUID (2e01a442-d848-4695-b031-9296ce3105b1) and root partition (hd0, msdos1) below are just reference which should be updated according to the user's environment.
+	menuentry 'XenGT 4.3.0' --class ubuntu --class gnu-linux --class gnu --class os {
+	    insmod part_msdos
+	    insmod ext2
+	    set root='(hd0,msdos1)'
+	    search --no-floppy --fs-uuid --set=root 2e01a442-d848-4695-b031-9296ce3105b1
+	    multiboot   /boot/xen-vgt.gz dom0_mem=2048M loglvl=all guest_loglvl=all conring_size=4M noreboot
+	    module  /boot/vmlinuz-4.3.0 root=UUID=2e01a442-d848-4695-b031-9296ce3105b1 rw rd_NO_LUKS rd_NO_LVM LANG=en_US.UTF-8 rd_NO_MD SYSFONT=latarcyrheb-sun16 rhgb crashkernel=auto KEYBOARDTYPE=pc KEYTABLE=us rd_NO_DM ignore_loglevel console=tty0 console=hvc0 consoleblank=0 log_buf_len=4M i915.hvm_boot_foreground=1 i915.enable_cmd_parser=0
+	    module  /boot/initrd.img
+	}
+
+3.4.2 For KVMGT:
+	menuentry 'KVMGT-4.3.0' --class ubuntu --class gnu-linux --class gnu --class os {
+	    insmod part_msdos
+	    insmod ext2
+	    set root='(hd0,msdos1)'
+	    search --no-floppy --fs-uuid --set=root 2e01a442-d848-4695-b031-9296ce3105b1
+	    linux   /boot/vmlinuz-4.3.0 root=UUID=2e01a442-d848-4695-b031-9296ce3105b1 intel_iommu=igfx_off i915.hvm_boot_foreground=1 i915.enable_cmd_parser=0 loglvl=all guest_loglvl=all conring_size=4M noreboot
+	    initrd  /boot/initrd.img
+	}
+
+   Note: 'intel_iommu=igfx_off' option is a hack for KVMGT, we will try to
+   fix this issue in the coming release.
+
+
+	+--------------------------------+----------------------------------+
+	| Configuration Option           | Description                      |
+	+--------------------------------+----------------------------------+
+	| i915.hvm_boot_foreground       | Make VM immediately visible on   |
+	|                                | the screen, after creation.      |
+	+--------------------------------+----------------------------------+
+	| i915.vgt                       | Option to enable/disable vgt for |
+	|                                | Dom0. 0 to disable vgt, 1 to     |
+	|                                | enable vgt(default).             |
+	+--------------------------------+----------------------------------+
+
+		Description of suggested parameters for grub
+
+
+
+3.5 Host Setup
+
+   For XenGT, start Xen Services by default
+
+	# update-rc.d xencommons defaults
+
+3.5.1 Build Graphics Stack (for the 5th and 6th Generation)
+
+   If you want to run lightdm well in Host/VM, the user mode 2D driver
+   update is required to support 5th and 6th Generation Intel® Core Processor Graphics.
+
+	# git clone git://anongit.freedesktop.org/git/xorg/driver/xf86-video-intel
+	# cd xf86-video-intel
+	# git checkout 2.99.917
+	# ./autogen.sh --prefix=/opt/hsw/usr
+	# make && make install
+	# cd /usr/lib/xorg/modules/drivers
+
+	backup original intel_drv.so
+	# ln -sf /opt/hsw/usr/lib/xorg/modules/drivers/intel_drv.so intel_drv.so
+
+
+3.5.2 Configuring Remote Control
+
+   Sometimes we want to do some remote control by VNC, but we cannot create
+   terminal on Ubuntu in vncviewer by default. To allow create terminal by
+   vncviewer, we need install the package as below:
+
+	# apt-get install gnome-panel gnome-settings-daemon metacity \
+		nautilus gnome-terminal -y
+
+   And we could setup the vncserver configuration file /root/.vnc/xstartup
+   as an example:
+
+	#!/bin/sh
+	export XKL_XMODMAP_DISABLE=1
+	unset SESSION_MANAGER
+	unset DBUS_SESSION_BUS_ADDRESS
+	[ -x /etc/vnc/xstartup ] && exec /etc/vnc/xstartup
+	[ -r $HOME/.Xresources ] && xrdb $HOME/.Xresources
+	xsetroot -solid grey
+	vncconfig -iconic &
+	gnome-panel &
+	gnome-settings-daemon &
+	metacity &
+	nautilus &
+	gnome-terminal &
+
+   Then we could launch an X server for VNC by the command as below:
+
+	# vncserver -geometry 1440x900
+
+   Then you can use ip:port to remote control the host by vncviewer.
+
+
+
+3.6 Guest Setup
+
+   Guest Setup describes how user can prepare their own guest OS: Ubuntu
+   or Windows that work on XenGT/KVMGT.
+
+3.6.1 Linux Guest Setup
+
+3.6.1.1 Kernel and Modules Update
+
+   Assume that you have an Ubuntu x86_64 14.04 image. You could update the
+   kernel and user mode drivers in guest image with following commands:
+
+	# modprobe loop
+	# kpartx -a -v /path/to/ubuntu14.04.img
+
+   The output will be something like below:
+
+	add map loop0p1 (253:0): 0 29638656 linear /dev/loop0 2048
+	add map loop0p2 (253:1): 0 1075202 linear /dev/loop0 29642750
+	add map loop0p5 : 0 1075200 linear 253:1 2
+
+   Mount loop0p1 to /mnt:
+
+	# mount /dev/mapper/loop0p1 /mnt/
+
+   Follow the steps in Section 3.2 to build host kernel and modules in
+   guest with 'chroot'.
+
+	# chroot /mnt/
+	# exit
+
+   Alternatively, you could copy the kernel/initrd and modules from host
+   to guest directly:
+
+	# cp /boot/vmlinuz-4.3.0 /mnt/boot/
+	# cp /boot/initrd.img /mnt/boot/
+	# cp -r /lib/modules/4.3.0* /mnt/lib/modules
+
+   Then you could run commands as below to fresh the guest image:
+
+	# umount /mnt
+	# kpartx -d -v /path/to/ubuntu14.04.img
+
+   Then you should add one new entry in guest's '/boot/grub/grub.cfg' for
+   the new kernel and initrd. You also need to copy vgt.rules file to
+   image's /etc/uev/rules.d/ directory. Now, the image is ready for
+   XenGT/KVMGT. You can follow section 4 to start the guest now.
+
+
+3.6.2 Windows Guest Setup
+
+   Assume you have already install the Windows Guest. You can get the
+   Windows driver from Intel website:
+
+	Windows driver version: 15.40.4352
+	32-bits/64-bits:
+
+   This driver support both 5th Gen and 6th Gen.
+   After installing the driver, a system reboot is required.
+
+4 VM Life Cycle Management
+
+4.1 Guest Creation
+
+4.1.1 For XenGT, prepare the xlexample.hvm
+
+   You could copy the xlexample.hvm from dom0's /etc/xen and modify the
+   parameters as following.
+
+	Kernel = 'hvmloader'
+	builder = 'hvm'
+	memory = 2048
+	name = 'vgtHVMDomain'
+	vif = [ 'type=ioemu, bridge=xenbr0' ]
+	disk = ['/path/to/Guest_OS.img,raw,hda,w']
+	device_model_version='qemu-xen'
+	device_model_override='/usr/lib/xen/bin/qemu-system-i386'
+	sdl=1
+	vnc=0
+	vncpasswd=''
+	serial='pty'
+	tsc_mode=0
+	stdvga = 0
+	usb=1
+	usbdevice='tablet'
+	keymap='en-us'
+	vgt=1
+	vgt_low_gm_sz=128
+	vgt_high_gm_sz=384
+	vgt_fence_sz=4
+	vgt_monitor_config_file='/path/to/monitor.config' #only valid for indirect display mode
+	acpi_s3=0
+        acpi_s4=0
+
+
+   The description of the XenGT-specific parameters(Don't set them before you upgrade the kernel of Host and Guest,
+   or else, the HVM Guest creation will fail):
+
+        +-------------------------+-------------------------------------------------+
+        | Configuration option    | Description                                     |
+        +-------------------------+-------------------------------------------------+
+        | vgt                     | Enable virtual graphics                         |
+        +-------------------------+-------------------------------------------------+
+        | vgt_low_gm_sz           | The low gm size which is CPU visible.           |
+        |                         | For Linux guest, it should be at least 64MB     |
+        |                         | For Windows guest, it should be at least 128MB  |
+        +-------------------------+-------------------------------------------------+
+        | vgt_high_gm_sz          | The high gm size which is CPU invisible         |
+        +-------------------------+-------------------------------------------------+
+        | vgt_fence_sz            | The number of the fence registers, default is 4 |
+        +-------------------------+-------------------------------------------------+
+        | vgt_monitor_config_file | Only valid for indirect display mode. Specify   |
+        |                         | the path to monitor configuration file          |
+        +-------------------------+-------------------------------------------------+
+
+
+   To create a Guest, use the command:
+
+        # xl create xlexample.hvm
+
+
+
+
+4.1.2 For KVMGT
+
+   To create a Guest, you could use the following command:
+
+	# /usr/bin/qemu-system-x86_64 -m 2048 -smp 2 \
+	-enable-kvm \
+	-M pc -machine kernel_irqchip=on \
+	-hda /path/to/Guest_OS.img \
+	-net nic -net tap,script=/path/to/qemu-ifup \
+	-vgt -vga vgt -vgt_low_gm_sz 128 \
+	-vgt_high_gm_sz 384 -vgt_fence_sz 4
+
+
+   The description of the KVMGT-specific parameters(Don't set them before you
+   upgrade the kernel for both Host and Guest):
+
+	+----------------------+-------------------------------------------------+
+	| Configuration option | Description                                     |
+	+----------------------+-------------------------------------------------+
+	| -vgt -vga vgt        | Enable virtual graphics                         |
+	+----------------------+-------------------------------------------------+
+	| -vgt_low_gm_sz       | The low gm size which is CPU visible.           |
+	|                      | For linux guest, it should be at least 64MB     |
+	|                      | For windows guest, it should be at least 128MB  |
+	+----------------------+-------------------------------------------------+
+	| -vgt_high_gm_sz      | The high gm size which is CPU invisible         |
+	+----------------------+-------------------------------------------------+
+	| -vgt_fence_sz        | The number of the fence registers, default is 4 |
+	+----------------------+-------------------------------------------------+
+
+    Note:
+	You need create qemu-ifup file in the /path/to/qemu-ifup.
+	add below info to /path/to/qemu-ifup
+	#!/bin/bash
+
+        switch=$(brctl show| sed -n 2p |awk '{print $1}')
+
+        if [ -n $switch ];then
+                tunctl -u `whoami` -t $1
+                ip link set $1 up
+                /sbin/ifconfig $1 0.0.0.0 up
+                brctl addif $switch $1
+                exit 0
+        else
+                echo Error: no interface specified
+                exit 1
+        fi
+
+4.1.3 Indirect Display Mode
+
+   Intel® GVT-g offers two modes for display, direct display mode which is
+   enabled by default and indirect display mode. In indirect display mode,
+   all display resources are virtualized and virtual port presented to Guest
+   could be different from the physical one.
+
+   To enable indirect display mode, you need to add
+   'i915.propagate_monitor_to_guest=0' as kernel boot parameter and prepare
+   a monitor.config as following:
+
+	# cat monitor.config
+	# monitor.config file.
+	# first bit 1 for text mode, and second bit 2 for number of ports in the config
+	11
+	# 04 for PORT_E; and 01 for PORT_B to be override (virtual VGA on physical DP)
+	0401
+	# Virtual VGA monitor EDID
+	00ffffffffffff000469b1232df80000
+	0f16010381331d782a5ea5a2554da026
+	115054bfef00d1c095008140818081c0
+	950fb300714f023a801871382d40582c
+	4500fd1e1100001e000000ff0043344c
+	4d54463036333533330a000000fd0032
+	4b185311000a202020202020000000fc
+	00415355532050413233380a202000e0
+
+   Note that we support virtual DP, virtual HDMI and virtual VGA for now.
+
+   For XenGT,
+
+	Add vgt_monitor_config_file='/path/to/monitor.config' to the xlexample.hvm
+	and then use xl create xlexample.hvm to boot the Guest.
+
+   For KVMGT,
+   
+         Add '-vgt_monitor_config_file /path/to/monitor.config' to the Guest boot up
+	command.
+
+4.1.4 Qemu Compositor Display Mode
+
+   Note, please set parameter "i915.hvm_boot_foreground=0" and add "i915.enable_vgtbuffer=1" in kernel grub command line,if not, you need to manually switch from Guest to host.
+
+         a. Install the needed packages into host:
+              # apt-get install libegl1-mesa-dev -y
+              # apt-get install libudev-dev -y
+   For XenGT,
+         b. In xlexample.hvm, specify vnc=0, sdl=1
+			  
+   For KVMGT,
+         b. Add "-display sdl" parameter to the Guest boot up command.
+
+
+5 Control Interfaces
+
+5.1 Display Switch
+
+   When a guest is created successfully with vgt enabled, the monitor
+   display will be switched to the Guest with i915.hvm_boot_foreground
+   set.
+   A system interface is created under /sys/kernel/vgt/ with name vm#
+   to show the guest ID. With this ID you can switch display between
+   host and guests:
+
+	# cat /sys/kernel/vgt/control/foreground_vm
+	1
+
+   You could change the display by echo guest ID into the sys interface:
+
+	# echo 0 > /sys/kernel/vgt/control/foreground_vm
+	# cat /sys/kernel/vgt/control/foreground_vm
+	0
+
+
+5.2 Virtual Hotplug (Indirect display mode)
+
+   In indirect display mode, we support virtual display hotplug for Guest.
+
+   Plug-out:
+
+	(vm# refer vm name + vm id; PORT_# refers to virtual port)
+	# echo disconnect > /sys/kernel/vgt/vm#/PORT_#/connection
+
+   Plug-in:
+
+	($edid refers to the information of the monitor you want Guest to recognize. PORT_# refers to virtual port)
+	# echo -n $edid > /sys/kernel/vgt/vm#/PORT_#/edid_text
+
+	(The first is physical port, the second is virtual port)
+	# echo "PORT_#" > /sys/kernel/vgt/vm#/PORT_#/port_override
+
+	(virtual port; for example: 3 = VGT_DP_C, 6 = VGT_HDMI_C)
+	# echo $port_type > /sys/kernel/vgt/vm#/PORT_#/type
+
+	(PORT_# refers to virtual port)
+	# echo connect > /sys/kernel/vgt/vm#/PORT_#/connection
+
+
+
+
+6 Features Supported
+
+6.1 Per-VM Features
+
+	+--------------------------------------+-----------+
+	| Features or Areas                    | Status    |
+	+--------------------------------------+-----------+
+	| SMP Dom0 and Guest                   | Supported |
+	| 2D Blitter                           | Supported |
+	| 3D Rendering (Direct3D/OpenGL)       | Supported |
+	| Single Monitor (HDMI/VGA/eDP/DP)     | Supported |
+	| Multiple Monitors (HDMI/VGA/eDP/DP)  | Supported |
+	| PPGTT                                | Supported |
+	| Dom0 S3                              | Supported |
+	| Indirect display                     | Supported |
+	| Windows 7/8.1                        | Supported |
+	| Media Decoding Hardware Acceleration | Supported |
+	+--------------------------------------+-----------+
+
+
+6.2 Virtualization Features
+
+      +-------------------------------+----------------------------------------------+
+      | Features or Areas             | Status                                       |
+      +-------------------------------+----------------------------------------------+
+      | Up to 3 vGT Guests            | 3 Guests, each with 128MB low graphics memory|
+      | Render Context Switch         | Supported                                    |
+      | Display Switch                | Supported                                    |
+      | VM Life Cycle                 | Supported                                    |
+      | XenGT Interfaces (APIs)       | Refer to the API document.                   |
+      | Monitor Hotplug               | Supported                                    |
+      | Different Monitor Resolutions | Supported                                    |
+      | GPU recovery                  | Preliminarily                                |
+      +-------------------------------+----------------------------------------------+
+
