@@ -42,6 +42,10 @@
 #include <asm/io.h>
 #include <asm/vmx.h>
 
+#ifdef CONFIG_KVMGT
+#include "kvmgt.h"
+#endif
+
 /*
  * When setting this variable to true it enables Two-Dimensional-Paging
  * where the hardware walks 2 page tables:
@@ -2512,6 +2516,13 @@ static int set_spte(struct kvm_vcpu *vcpu, u64 *sptep,
 		    has_wrprotected_page(vcpu, gfn, level))
 			goto done;
 
+#ifdef CONFIG_KVMGT
+		if (kvmgt_gfn_is_write_protected(vcpu->kvm, gfn)) {
+			ret = 1;
+			goto set_pte;
+		}
+#endif
+
 		spte |= PT_WRITABLE_MASK | SPTE_MMU_WRITEABLE;
 
 		/*
@@ -2886,6 +2897,14 @@ static bool fast_page_fault(struct kvm_vcpu *vcpu, gva_t gva, int level,
 
 	if (!VALID_PAGE(vcpu->arch.mmu.root_hpa))
 		return false;
+
+#ifdef CONFIG_KVMGT
+	/*
+	 * KVMGT write-protected pages cannot be fast-faulted
+	 */
+	if (kvmgt_gfn_is_write_protected(vcpu->kvm, gpa_to_gfn(gva)))
+		return false;
+#endif
 
 	if (!page_fault_can_be_fast(error_code))
 		return false;
@@ -4965,3 +4984,108 @@ void kvm_mmu_module_exit(void)
 	unregister_shrinker(&mmu_shrinker);
 	mmu_audit_disable();
 }
+
+#ifdef CONFIG_KVMGT
+static bool kvmgt_write_protect_add_gfn(struct kvm *kvm, u64 gfn)
+{
+	struct kvm_memory_slot *slot;
+	unsigned long *rmapp;
+	bool flush = false;
+
+	slot = gfn_to_memslot(kvm, gfn);
+
+	rmapp = __gfn_to_rmap(gfn, PT_PAGE_TABLE_LEVEL, slot);
+	flush = __rmap_write_protect(kvm, rmapp, false);
+
+	return flush;
+}
+
+static bool __spte_unset_write_protect(struct kvm *kvm, u64 *sptep)
+{
+	u64 spte = *sptep;
+
+	if (is_writable_pte(spte))
+		return false;
+
+	spte |= PT_WRITABLE_MASK | SPTE_MMU_WRITEABLE;
+
+	return mmu_spte_update(sptep, spte);
+}
+
+static bool kvmgt_write_protect_remove_gfn(struct kvm *kvm, u64 gfn)
+{
+	struct kvm_memslots *slots;
+	struct kvm_memory_slot *slot;
+	unsigned long *rmapp;
+	u64 *sptep;
+	struct rmap_iterator iter;
+	bool flush = false;
+	int i = 0;
+
+	slots = kvm_memslots(kvm);
+	slot = __gfn_to_memslot(slots, gfn);
+	rmapp = __gfn_to_rmap(gfn, PT_PAGE_TABLE_LEVEL, slot);
+
+	for (sptep = rmap_get_first(*rmapp, &iter); sptep;) {
+		BUG_ON(!(*sptep & PT_PRESENT_MASK));
+		WARN_ON((*sptep & PT_WRITABLE_MASK));
+		/* only direct mode supported */
+		BUG_ON(i++);
+
+		flush |= __spte_unset_write_protect(kvm, sptep);
+		sptep = rmap_get_next(&iter);
+	}
+
+	return flush;
+}
+
+bool kvmgt_write_protect(struct kvm *kvm, gfn_t gfn, bool add)
+{
+	return add ? kvmgt_write_protect_add_gfn(kvm, gfn) :
+			kvmgt_write_protect_remove_gfn(kvm, gfn);
+}
+
+static unsigned long *kvmgt_gfn_to_rmap(struct kvm *kvm, gfn_t gfn, int level)
+{
+	struct kvm_memory_slot *slot;
+	unsigned long idx;
+
+	slot = gfn_to_memslot(kvm, gfn);
+	if (!slot)
+		return NULL;
+
+	idx = gfn_to_index(gfn, slot->base_gfn, level);
+
+	if (!slot->arch.rmap ||
+			!slot->arch.rmap[level - PT_PAGE_TABLE_LEVEL])
+		return NULL;
+
+	return &slot->arch.rmap[level - PT_PAGE_TABLE_LEVEL][idx];
+}
+
+pfn_t kvmgt_gfn_to_pfn_by_rmap(struct kvm *kvm, u64 gfn)
+{
+	unsigned long *rmapp = kvmgt_gfn_to_rmap(kvm, gfn, PT_PAGE_TABLE_LEVEL);
+	u64 *sptep;
+	struct rmap_iterator iter;
+	pfn_t pfn;
+	int i = 0;
+
+	if (!rmapp)
+		return KVM_PFN_ERR_FAULT;
+
+	for (sptep = rmap_get_first(*rmapp, &iter); sptep;) {
+		BUG_ON(!(*sptep & PT_PRESENT_MASK));
+		/* only direct mode supported */
+		BUG_ON(i++);
+
+		pfn = spte_to_pfn(*sptep);
+		sptep = rmap_get_next(&iter);
+	}
+
+	if (!i)
+		return KVM_PFN_ERR_FAULT;
+
+	return pfn;
+}
+#endif /* CONFIG_KVMGT */

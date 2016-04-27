@@ -437,6 +437,19 @@ exit_trap:
 	do_trap(X86_TRAP_BR, SIGSEGV, "bounds", regs, error_code, NULL);
 }
 
+static int (*gp_prehandler)(struct pt_regs *regs, long error_code);
+int register_gp_prehandler(int (*handler)(struct pt_regs *regs, long error_code))
+{
+	if (gp_prehandler) {
+		printk(KERN_INFO "GP prehandler has been registered (0x%p)\n",
+				gp_prehandler);
+		return -EBUSY;
+	}
+
+	gp_prehandler = handler;
+	return 0;
+}
+
 dotraplinkage void
 do_general_protection(struct pt_regs *regs, long error_code)
 {

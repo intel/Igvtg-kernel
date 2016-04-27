@@ -1,9 +1,11 @@
 
 ccflags-y += -Iarch/x86/kvm
+ccflags-$(CONFIG_KVMGT) += -Idrivers/gpu/drm/i915/vgt
 
 CFLAGS_x86.o := -I.
 CFLAGS_svm.o := -I.
 CFLAGS_vmx.o := -I.
+CFLAGS_kvmgt.o := -Werror
 
 KVM := ../../../virt/kvm
 
@@ -18,6 +20,7 @@ kvm-y			+= x86.o mmu.o emulate.o i8259.o irq.o lapic.o \
 kvm-$(CONFIG_KVM_DEVICE_ASSIGNMENT)	+= assigned-dev.o iommu.o
 kvm-intel-y		+= vmx.o pmu_intel.o
 kvm-amd-y		+= svm.o pmu_amd.o
+kvm-$(CONFIG_KVMGT)	+= kvmgt.o
 
 obj-$(CONFIG_KVM)	+= kvm.o
 obj-$(CONFIG_KVM_INTEL)	+= kvm-intel.o

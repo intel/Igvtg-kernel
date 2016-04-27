@@ -1,0 +1,58 @@
+# WARNING: for testing you should not try to use echo something to the screen. For the udev configure you may not even notice any output.
+#		   So if you really want to verify if some uevents are received. You should not connt on any output message of your tested program.
+#
+# This file is used to describe the uevents from vGT driver. And should be placed under /etc/udev/rules.d
+# All the *.rules files are scaned on lexical sequence by udev deamon when it boots.
+#
+# udevinfo seemed like a legacy tool. Not sure if deprecated now. But not available on redhat 6.2.
+# If you want to check the info of some sys node, e.g /sys/kernel/vgt
+# you can use this command:
+#
+#	udevadm info --attribute-walk  --path=/sys/kernel/vgt
+#
+# Also if you just want to monitor the kernel event on realtime, you can use this command:
+#
+#	udevadm monitor --kernel
+#
+# When you do not have any idea about how to write udev rules, you can use this way to check if your desired uevents sent out.
+#
+# Also, please remember run:
+#
+#	udevadm control --reload-rules
+#
+# To reload these rules, or you cannot make the udevd apply the updated rules.
+#
+#
+# bit field definition of the hot_plug trigger value:
+#
+# bit 31 - bit 16	: Reserved;
+# bit 15 - bit 8	: vmid; Warning: vmid can be used out if you keep on destory & recreate VMs.
+#					Right now the maximum vmid supported in hotplug is 254(0xfe)
+#					vmid 255 (0xff) has special meaning to send interrupt for all VMs including dom0.
+# bit 7 - bit 4		: Reserved;
+# bit 3 - bit 1		: Port/monitor selection:
+# 		0	-	CRT
+# 		1	-	PORT_A
+# 		2	-	PORT_B
+# 		3	-	PORT_C
+# 		4	-	PORT_D
+# bit 0 - bit 0		: Direction.
+#		0: pull out;
+#		1: plug in;
+#
+# by axu
+#
+#ACTION=="add", KERNEL=="control", ENV{CRT_INSERT}=="1", RUN+="/bin/sh -c 'echo CRT monitor inserted! >> /tmp/hotplug'"
+#ACTION=="remove", KERNEL=="control", ENV{CRT_REMOVE}=="1", RUN+="/bin/sh -c 'echo CRT monitor removed! >> /tmp/hotplug'"
+#KERNEL=="control", RUN+="/bin/sh -c 'echo inserted >> /tmp/hotplug'"
+#
+#write 0x0f1(241) for plug in; 0x0f0(240) for pull out.
+ACTION=="add", KERNEL=="control", ENV{VGT_ENABLE_VGA}=="1", RUN+="/bin/sh -c 'echo VM_$env{VMID}_enable_VGA_mode >> /tmp/vgt-log'"
+ACTION=="add", KERNEL=="control", ENV{VGT_ENABLE_VGA}=="0", RUN+="/bin/sh -c 'echo VM_$env{VMID}_disable_VGA_mode >> /tmp/vgt-log'"
+ACTION=="add", KERNEL=="control", ENV{VGT_DISPLAY_READY}=="1", RUN+="/bin/sh -c 'echo VM_$env{VMID}_display_ready >> /tmp/vgt-log'"
+ACTION=="add", KERNEL=="control", ENV{VGT_DISPLAY_READY}=="0", RUN+="/bin/sh -c 'echo VM_$env{VMID}_display_unready >> /tmp/vgt-log'"
+ACTION=="add", KERNEL=="control", ENV{VGT_DETECT_PORT_A}=="1", RUN+="/bin/sh -c '/usr/bin/vgt_mgr --detect-display PORT_A'"
+ACTION=="add", KERNEL=="control", ENV{VGT_DETECT_PORT_B}=="1", RUN+="/bin/sh -c '/usr/bin/vgt_mgr --detect-display PORT_B'"
+ACTION=="add", KERNEL=="control", ENV{VGT_DETECT_PORT_C}=="1", RUN+="/bin/sh -c '/usr/bin/vgt_mgr --detect-display PORT_C'"
+ACTION=="add", KERNEL=="control", ENV{VGT_DETECT_PORT_D}=="1", RUN+="/bin/sh -c '/usr/bin/vgt_mgr --detect-display PORT_D'"
+ACTION=="add", KERNEL=="control", ENV{VGT_DETECT_PORT_E}=="1", RUN+="/bin/sh -c '/usr/bin/vgt_mgr --detect-display PORT_E'"

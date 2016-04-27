@@ -758,6 +758,26 @@ static int i915_gem_seqno_info(struct seq_file *m, void *data)
 	return 0;
 }
 
+extern u64 i915_ring_0_idle;
+extern u64 i915_ring_0_busy;
+static int i915_ring_info(struct seq_file *m, void *data)
+{
+	struct drm_info_node *node = (struct drm_info_node *) m->private;
+	struct drm_device *dev = node->minor->dev;
+	int ret;
+
+	ret = mutex_lock_interruptible(&dev->struct_mutex);
+	if (ret)
+		return ret;
+
+	seq_printf(m, "i915_ring_0_idle %08lx busy %08lx\n",
+			(unsigned long) i915_ring_0_idle,
+			(unsigned long) i915_ring_0_busy);
+
+	mutex_unlock(&dev->struct_mutex);
+
+	return 0;
+}
 
 static int i915_interrupt_info(struct seq_file *m, void *data)
 {
@@ -2889,10 +2909,11 @@ static void intel_connector_info(struct seq_file *m,
 {
 	struct intel_connector *intel_connector = to_intel_connector(connector);
 	struct intel_encoder *intel_encoder = intel_connector->encoder;
+	struct intel_digital_port *dig_port = enc_to_dig_port(&intel_encoder->base);
 	struct drm_display_mode *mode;
 
-	seq_printf(m, "connector %d: type %s, status: %s\n",
-		   connector->base.id, connector->name,
+	seq_printf(m, "connector %d: type %s, port PORT_%c, status: %s\n",
+		   connector->base.id, connector->name, port_name(dig_port->port),
 		   drm_get_connector_status_name(connector->status));
 	if (connector->status == connector_status_connected) {
 		seq_printf(m, "\tname: %s\n", connector->display_info.name);
@@ -5211,6 +5232,7 @@ static const struct drm_info_list i915_debugfs_list[] = {
 	{"i915_gem_seqno", i915_gem_seqno_info, 0},
 	{"i915_gem_fence_regs", i915_gem_fence_regs_info, 0},
 	{"i915_gem_interrupt", i915_interrupt_info, 0},
+	{"i915_ring_info", i915_ring_info, 0},
 	{"i915_gem_hws", i915_hws_info, 0, (void *)RCS},
 	{"i915_gem_hws_blt", i915_hws_info, 0, (void *)BCS},
 	{"i915_gem_hws_bsd", i915_hws_info, 0, (void *)VCS},

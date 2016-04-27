@@ -40,6 +40,8 @@
 #include <linux/pm_runtime.h>
 #include <drm/drm_crtc_helper.h>
 
+bool i915_host_mediate __read_mostly = false;
+
 static struct drm_driver driver;
 
 #define GEN_DEFAULT_PIPEOFFSETS \
@@ -434,6 +436,7 @@ static const struct intel_device_info intel_broxton_info = {
 	INTEL_SKL_GT1_IDS(&intel_skylake_info),	\
 	INTEL_SKL_GT2_IDS(&intel_skylake_info),	\
 	INTEL_SKL_GT3_IDS(&intel_skylake_gt3_info),	\
+	INTEL_SKL_GT4_IDS(&intel_skylake_gt3_info), \
 	INTEL_BXT_IDS(&intel_broxton_info)
 
 static const struct pci_device_id pciidlist[] = {		/* aka */
@@ -475,6 +478,8 @@ void intel_detect_pch(struct drm_device *dev)
 {
 	struct drm_i915_private *dev_priv = dev->dev_private;
 	struct pci_dev *pch = NULL;
+
+	printk("i915: intel_detect_pch\n");
 
 	/* In all current cases, num_pipes is equivalent to the PCH_NOP setting
 	 * (which really amounts to a PCH but no South Display).
@@ -741,6 +746,7 @@ int i915_suspend_switcheroo(struct drm_device *dev, pm_message_t state)
 static int i915_drm_resume(struct drm_device *dev)
 {
 	struct drm_i915_private *dev_priv = dev->dev_private;
+	int ret = 0;
 
 	mutex_lock(&dev->struct_mutex);
 	i915_gem_restore_gtt_mappings(dev);
@@ -975,6 +981,8 @@ static int i915_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	if (PCI_FUNC(pdev->devfn))
 		return -ENODEV;
 
+	driver.driver_features &= ~(DRIVER_USE_AGP);
+
 	return drm_get_pci_dev(pdev, ent, &driver);
 }
 
@@ -990,6 +998,7 @@ static int i915_pm_suspend(struct device *dev)
 {
 	struct pci_dev *pdev = to_pci_dev(dev);
 	struct drm_device *drm_dev = pci_get_drvdata(pdev);
+	int error;
 
 	if (!drm_dev || !drm_dev->dev_private) {
 		dev_err(dev, "DRM not initialized, aborting suspend.\n");
@@ -999,7 +1008,18 @@ static int i915_pm_suspend(struct device *dev)
 	if (drm_dev->switch_power_state == DRM_SWITCH_POWER_OFF)
 		return 0;
 
-	return i915_drm_suspend(drm_dev);
+	error = i915_drm_suspend(drm_dev);
+	if (error)
+		return error;
+
+#ifdef CONFIG_I915_VGT
+	if (i915_host_mediate) {
+		error = vgt_suspend(pdev);
+		if (error)
+			return error;
+	}
+#endif
+	return 0;
 }
 
 static int i915_pm_suspend_late(struct device *dev)
@@ -1047,6 +1067,14 @@ static int i915_pm_resume(struct device *dev)
 
 	if (drm_dev->switch_power_state == DRM_SWITCH_POWER_OFF)
 		return 0;
+
+#ifdef DRM_I915_VGT_SUPPORT
+	if (i915_host_mediate) {
+		int error = vgt_resume(drm_dev->pdev);
+		if (error)
+			return error;
+	}
+#endif
 
 	return i915_drm_resume(drm_dev);
 }

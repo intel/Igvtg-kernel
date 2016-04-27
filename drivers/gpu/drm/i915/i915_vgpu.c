@@ -66,16 +66,16 @@ void i915_check_vgpu(struct drm_device *dev)
 
 	BUILD_BUG_ON(sizeof(struct vgt_if) != VGT_PVINFO_SIZE);
 
-	if (!IS_HASWELL(dev))
+	if (!IS_HASWELL(dev) && !IS_BROADWELL(dev) && !IS_SKYLAKE(dev))
 		return;
 
-	magic = readq(dev_priv->regs + vgtif_reg(magic));
+	magic = I915_READ64(vgtif_reg(magic));
 	if (magic != VGT_MAGIC)
 		return;
 
 	version = INTEL_VGT_IF_VERSION_ENCODE(
-		readw(dev_priv->regs + vgtif_reg(version_major)),
-		readw(dev_priv->regs + vgtif_reg(version_minor)));
+		(I915_READ16(vgtif_reg(version_major))),
+		(I915_READ16(vgtif_reg(version_minor))));
 	if (version != INTEL_VGT_IF_VERSION) {
 		DRM_INFO("VGT interface version mismatch!\n");
 		return;

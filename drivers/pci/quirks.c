@@ -3018,6 +3018,12 @@ static void fixup_debug_report(struct pci_dev *dev, ktime_t calltime,
 	}
 }
 
+#if 0
+   /*
+    * TODO: Temporary disable the GEN register access before
+    * vgt driver is fully initialized to trap-and-emulate.
+    * Need to revisit with on-demand dom0 GEN MMIO trapping.
+    */
 /*
  * Some BIOS implementations leave the Intel GPU interrupts enabled,
  * even though no one is handling them (f.e. i915 driver is never loaded).
@@ -3051,6 +3057,7 @@ static void disable_igfx_irq(struct pci_dev *dev)
 DECLARE_PCI_FIXUP_FINAL(PCI_VENDOR_ID_INTEL, 0x0102, disable_igfx_irq);
 DECLARE_PCI_FIXUP_FINAL(PCI_VENDOR_ID_INTEL, 0x010a, disable_igfx_irq);
 DECLARE_PCI_FIXUP_FINAL(PCI_VENDOR_ID_INTEL, 0x0152, disable_igfx_irq);
+#endif
 
 /*
  * PCI devices which are on Intel chips can skip the 10ms delay

@@ -1960,4 +1960,8 @@ static inline bool pci_ari_enabled(struct pci_bus *bus)
 {
 	return bus->self && bus->self->ari_enabled;
 }
+/* VGT device definition */
+#define VGT_BUS_ID	0
+#define VGT_DEVFN	0x10	/* B:D:F = 0:2:0 */
+
 #endif /* LINUX_PCI_H */

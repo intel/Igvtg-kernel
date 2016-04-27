@@ -65,6 +65,10 @@
 #include <asm/pvclock.h>
 #include <asm/div64.h>
 
+#ifdef CONFIG_KVMGT
+#include "kvmgt.h"
+#endif
+
 #define MAX_IO_MSRS 256
 #define KVM_MAX_MCE_BANKS 32
 #define KVM_MCE_CAP_SUPPORTED (MCG_CTL_P | MCG_SER_P)
@@ -95,6 +99,11 @@ EXPORT_SYMBOL_GPL(kvm_x86_ops);
 
 static bool ignore_msrs = 0;
 module_param(ignore_msrs, bool, S_IRUGO | S_IWUSR);
+
+#ifdef CONFIG_KVMGT
+bool passthrough_msrs = 0;
+module_param(passthrough_msrs, bool, S_IRUGO | S_IWUSR);
+#endif
 
 unsigned int min_timer_period_us = 500;
 module_param(min_timer_period_us, uint, S_IRUGO | S_IWUSR);
@@ -2114,6 +2123,10 @@ int kvm_set_msr_common(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 			return xen_hvm_config(vcpu, data);
 		if (kvm_pmu_is_valid_msr(vcpu, msr))
 			return kvm_pmu_set_msr(vcpu, msr_info);
+#ifdef CONFIG_KVMGT
+		if (kvmgt_is_passthrough_msr(msr))
+			break; /* will be ingored */
+#endif
 		if (!ignore_msrs) {
 			vcpu_unimpl(vcpu, "unhandled wrmsr: 0x%x data %llx\n",
 				    msr, data);
@@ -2324,6 +2337,20 @@ int kvm_get_msr_common(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 	default:
 		if (kvm_pmu_is_valid_msr(vcpu, msr_info->index))
 			return kvm_pmu_get_msr(vcpu, msr_info->index, &msr_info->data);
+#ifdef CONFIG_KVMGT
+		if (kvmgt_is_passthrough_msr(msr_info->index)) {
+			u64 val;
+			int err;
+
+			val = native_read_msr_safe(msr_info->index, &err);
+			if (!err)
+				msr_info->data = val;
+			else
+				msr_info->data = 0;
+
+			return 0;
+		}
+#endif
 		if (!ignore_msrs) {
 			vcpu_unimpl(vcpu, "unhandled rdmsr: 0x%x\n", msr_info->index);
 			return 1;
@@ -4131,6 +4158,17 @@ int emulator_write_phys(struct kvm_vcpu *vcpu, gpa_t gpa,
 {
 	int ret;
 
+#ifdef CONFIG_KVMGT
+	gfn_t gfn = gpa_to_gfn(gpa);
+
+	if (kvmgt_gfn_is_write_protected(vcpu->kvm, gfn)) {
+		if (!kvmgt_emulate_write(vcpu->kvm, gpa, val, bytes))
+			return 0;
+
+		return 1;
+	}
+#endif
+
 	ret = kvm_vcpu_write_guest(vcpu, gpa, val, bytes);
 	if (ret < 0)
 		return 0;
@@ -4407,6 +4445,13 @@ static int kernel_pio(struct kvm_vcpu *vcpu, void *pd)
 	/* TODO: String I/O for in kernel device */
 	int r;
 
+#ifdef CONFIG_KVMGT
+	if (kvmgt_pio_is_igd_cfg(vcpu)) {
+		if (!kvmgt_pio_igd_cfg(vcpu))
+			return -EOPNOTSUPP;
+		return 0;
+	}
+#endif
 	if (vcpu->arch.pio.in)
 		r = kvm_io_bus_read(vcpu, KVM_PIO_BUS, vcpu->arch.pio.port,
 				    vcpu->arch.pio.size, pd);
@@ -4425,6 +4470,12 @@ static int emulator_pio_in_out(struct kvm_vcpu *vcpu, int size,
 	vcpu->arch.pio.in = in;
 	vcpu->arch.pio.count  = count;
 	vcpu->arch.pio.size = size;
+
+#ifdef CONFIG_KVMGT
+	if (vcpu->kvm->vgt_enabled && !in)
+		kvmgt_record_cf8(vcpu, port,
+					kvm_register_read(vcpu, VCPU_REGS_RAX));
+#endif
 
 	if (!kernel_pio(vcpu, vcpu->arch.pio_data)) {
 		vcpu->arch.pio.count = 0;
@@ -7653,11 +7704,108 @@ void kvm_arch_memslots_updated(struct kvm *kvm, struct kvm_memslots *slots)
 	kvm_mmu_invalidate_mmio_sptes(kvm, slots);
 }
 
+static int private_map_anno(struct kvm *kvm, struct kvm_memory_slot *memslot,
+			const struct kvm_userspace_memory_region *mem)
+{
+	unsigned long userspace_addr;
+
+	/*
+	 * MAP_SHARED to prevent internal slot pages from being moved
+	 * by fork()/COW.
+	 */
+	userspace_addr = vm_mmap(NULL, 0, memslot->npages * PAGE_SIZE,
+					 PROT_READ | PROT_WRITE,
+					 MAP_SHARED | MAP_ANONYMOUS, 0);
+
+	if (IS_ERR((void *)userspace_addr))
+		return PTR_ERR((void *)userspace_addr);
+
+	memslot->userspace_addr = userspace_addr;
+	return 0;
+}
+
+#ifdef CONFIG_KVMGT
+static int private_map_aperture(struct kvm *kvm,
+			struct kvm_memory_slot *memslot,
+			const struct kvm_userspace_memory_region *mem)
+{
+	mm_segment_t oldfs;
+	struct file *devmem;
+	unsigned long userspace_addr;
+
+	oldfs = get_fs();
+	set_fs(KERNEL_DS);
+	devmem = filp_open("/dev/mem", O_RDWR, 0644);
+	if (IS_ERR(devmem)) {
+		printk(KERN_ERR "filp_open failed\n");
+		set_fs(oldfs);
+		return PTR_ERR((void *)devmem);
+	}
+
+	userspace_addr = vm_mmap(devmem, 0, mem->memory_size,
+						PROT_READ | PROT_WRITE,
+						MAP_SHARED, kvm->aperture_hpa);
+	if (IS_ERR_VALUE(userspace_addr)) {
+		printk(KERN_ERR "vm_mmap failed, got bad addr: 0x%lx\n",
+					userspace_addr);
+		filp_close(devmem, NULL);
+		set_fs(oldfs);
+		return PTR_ERR((void *)userspace_addr);
+	}
+	memslot->userspace_addr = userspace_addr;
+	filp_close(devmem, NULL);
+	set_fs(oldfs);
+	return 0;
+}
+#endif
+
+static void private_unmap_anno(struct kvm *kvm,
+			const struct kvm_userspace_memory_region *mem,
+			const struct kvm_memory_slot *old)
+{
+	int ret;
+
+	ret = vm_munmap(old->userspace_addr, old->npages * PAGE_SIZE);
+	if (ret < 0)
+		printk(KERN_WARNING "failed to munmap memory\n");
+}
+
+static struct {
+	int (*arch_create)(struct kvm *kvm,
+				struct kvm_memory_slot *memslot,
+				const struct kvm_userspace_memory_region *mem);
+	void (*arch_delete)(struct kvm *kvm,
+				const struct kvm_userspace_memory_region *mem,
+				const struct kvm_memory_slot *old);
+} private_memslots[] = {
+	[0 ... KVM_PRIVATE_MEM_SLOTS - 1] = {
+		.arch_create = private_map_anno,
+		.arch_delete = private_unmap_anno,
+	},
+#ifdef CONFIG_KVMGT
+	[VGT_APERTURE_PRIVATE_MEMSLOT - KVM_USER_MEM_SLOTS] = {
+		.arch_create = private_map_aperture,
+		.arch_delete = private_unmap_anno,
+	},
+#endif
+};
+
 int kvm_arch_prepare_memory_region(struct kvm *kvm,
 				struct kvm_memory_slot *memslot,
 				const struct kvm_userspace_memory_region *mem,
 				enum kvm_mr_change change)
+
 {
+	/*
+	 * Only private memory slots need to be mapped here since
+	 * KVM_SET_MEMORY_REGION ioctl is no longer supported.
+	 */
+	if ((memslot->id >= KVM_USER_MEM_SLOTS) &&
+				(change == KVM_MR_CREATE) &&
+				(private_memslots[memslot->id -
+				 KVM_USER_MEM_SLOTS].arch_create))
+		return private_memslots[memslot->id - KVM_USER_MEM_SLOTS].arch_create(
+					kvm, memslot, mem);
 	return 0;
 }
 
@@ -7718,6 +7866,22 @@ void kvm_arch_commit_memory_region(struct kvm *kvm,
 				enum kvm_mr_change change)
 {
 	int nr_mmu_pages = 0;
+
+	if (change == KVM_MR_DELETE && old->id >= KVM_USER_MEM_SLOTS) {
+		int ret;
+
+		ret = vm_munmap(old->userspace_addr,
+				old->npages * PAGE_SIZE);
+		if (ret < 0)
+			printk(KERN_WARNING
+			       "kvm_vm_ioctl_set_memory_region: "
+			       "failed to munmap memory\n");
+	}
+	if ((mem->slot >= KVM_USER_MEM_SLOTS) &&
+		(change == KVM_MR_DELETE) &&
+		(private_memslots[mem->slot - KVM_USER_MEM_SLOTS].arch_delete))
+			private_memslots[mem->slot - KVM_USER_MEM_SLOTS].arch_delete(kvm,
+						mem, old);
 
 	if (!kvm->arch.n_requested_mmu_pages)
 		nr_mmu_pages = kvm_mmu_calculate_mmu_pages(kvm);

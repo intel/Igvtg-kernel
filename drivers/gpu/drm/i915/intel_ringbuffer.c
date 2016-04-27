@@ -44,8 +44,10 @@ intel_ring_initialized(struct intel_engine_cs *ring)
 	if (i915.enable_execlists) {
 		struct intel_context *dctx = ring->default_context;
 		struct intel_ringbuffer *ringbuf = dctx->engine[ring->id].ringbuf;
-
-		return ringbuf->obj;
+		if (!ringbuf)
+			return false;
+		else
+			return ringbuf->obj;
 	} else
 		return ring->buffer && ring->buffer->obj;
 }
@@ -850,6 +852,9 @@ static int gen8_init_workarounds(struct intel_engine_cs *ring)
 	WA_SET_FIELD_MASKED(GEN7_GT_MODE,
 			    GEN6_WIZ_HASHING_MASK,
 			    GEN6_WIZ_HASHING_16x4);
+
+	/* WaProgramL3SqcReg1Default:bdw */
+	WA_WRITE(GEN8_L3SQCREG1, BDW_WA_L3SQCREG1_DEFAULT);
 
 	return 0;
 }
@@ -3076,3 +3081,37 @@ intel_stop_ring_buffer(struct intel_engine_cs *ring)
 
 	stop_ring(ring);
 }
+
+static bool is_rendering_engine_empty(struct drm_i915_private *dev_priv, int ring_id)
+{
+	static	int ring_mi_regs[3] = { 0x0209C, 0x1209C, 0x2209C };
+	u32	mi_mode;
+
+	mi_mode = I915_READ(ring_mi_regs[ring_id]);
+	if ( mi_mode & (1 << 9) )
+		return true;
+	else
+		return false;
+}
+
+extern struct drm_i915_private *gpu_perf_dev_priv;
+u64	i915_ring_0_idle = 0;
+u64	i915_ring_0_busy = 0;
+void gpu_perf_sample(void)
+{
+	struct drm_i915_private *dev_priv = gpu_perf_dev_priv;
+	int	ring_id = 0;
+	static  int count = 0;
+
+	if ( dev_priv ) {
+		if ( count ++ % 1000 == 0 )
+			printk("dev_priv->regs: %p\n", dev_priv->regs);
+		if ( spin_is_locked (&dev_priv->uncore.lock) )
+			return;
+		if ( is_rendering_engine_empty(dev_priv, ring_id) )
+			i915_ring_0_idle++;
+		else
+			i915_ring_0_busy++;
+	}
+}
+EXPORT_SYMBOL_GPL(gpu_perf_sample);

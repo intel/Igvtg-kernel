@@ -81,6 +81,7 @@ int kvm_send_userspace_msi(struct kvm *kvm, struct kvm_msi *msi)
 
 	return kvm_set_msi(&route, kvm, KVM_USERSPACE_IRQ_SOURCE_ID, 1, false);
 }
+EXPORT_SYMBOL(kvm_send_userspace_msi);
 
 /*
  * Return value:

@@ -4403,7 +4403,21 @@ void gen6_rps_idle(struct drm_i915_private *dev_priv)
 		else
 			gen6_set_rps(dev_priv->dev, dev_priv->rps.idle_freq);
 		dev_priv->rps.last_adj = 0;
-		I915_WRITE(GEN6_PMINTRMSK, 0xffffffff);
+		/* mask the rps interrupts before the next boost submission
+		 * with vgt disabled.
+		 * in vgt, only dom0 can access the pm reference registers,
+		 * but dom0 i915 driver don't know there is or not unfinished
+		 * submission from DomU. it will deal as idle after the last
+		 * submission from itself is finished. gpu will run with low
+		 * freq if no more boost submission from dom0.
+		 * remove the mask of rps interrupts when run into idle
+		 * state(not really gpu idle) with vgt enabled, ensure the
+		 * gpu freq also can be adjusted when only work loading
+		 * from domU.
+		 * this trick will be removed later when host mediation is
+		 * removed. */
+		if (!i915_host_mediate)
+			I915_WRITE(GEN6_PMINTRMSK, 0xffffffff);
 	}
 	mutex_unlock(&dev_priv->rps.hw_lock);
 
@@ -4707,9 +4721,15 @@ static void gen9_enable_rc6(struct drm_device *dev)
 	 * 3b: Enable Coarse Power Gating only when RC6 is enabled.
 	 * WaRsDisableCoarsePowerGating:skl,bxt - Render/Media PG need to be disabled with RC6.
 	 */
+
+	/* Disabling PG on all revisions of SKL GT3/4, since we can see bug 1000
+	 * on latest revision of SKL (rev 09). It's a temp workaround and we
+	 * need to find more graceful method to handle forcewake on VGT.
+	 */
 	if (IS_BXT_REVID(dev, 0, BXT_REVID_A1) ||
 	    ((IS_SKL_GT3(dev) || IS_SKL_GT4(dev)) &&
-	     IS_SKL_REVID(dev, 0, SKL_REVID_E0)))
+	     i915.gen9_pg_wa_enable &&
+	     IS_SKL_REVID(dev, 0, REVID_FOREVER)))
 		I915_WRITE(GEN9_PG_ENABLE, 0);
 	else
 		I915_WRITE(GEN9_PG_ENABLE, (rc6_mask & GEN6_RC_CTL_RC6_ENABLE) ?
@@ -6116,7 +6136,7 @@ void intel_enable_gt_powersave(struct drm_device *dev)
 	struct drm_i915_private *dev_priv = dev->dev_private;
 
 	/* Powersaving is controlled by the host when inside a VM */
-	if (intel_vgpu_active(dev))
+	if (intel_vgpu_active(dev) && !i915_host_mediate)
 		return;
 
 	if (IS_IRONLAKE_M(dev)) {
@@ -6471,8 +6491,7 @@ static void broadwell_init_clock_gating(struct drm_device *dev)
 
 	ilk_init_lp_watermarks(dev);
 
-	/* WaSwitchSolVfFArbitrationPriority:bdw */
-	I915_WRITE(GAM_ECOCHK, I915_READ(GAM_ECOCHK) | HSW_ECOCHK_ARB_PRIO_SOL);
+	I915_WRITE(GAM_ECOCHK, I915_READ(GAM_ECOCHK) | ECOCHK_PPGTT_WB_HSW);
 
 	/* WaPsrDPAMaskVBlankInSRD:bdw */
 	I915_WRITE(CHICKEN_PAR1_1,
@@ -6513,6 +6532,19 @@ static void broadwell_init_clock_gating(struct drm_device *dev)
 	 * are ever enabled GTT cache may need to be disabled.
 	 */
 	I915_WRITE(HSW_GTT_CACHE_EN, GTT_CACHE_EN_ALL);
+
+	if (i915.enable_execlists) {
+		/* WaOCLCoherentLineFlush:bdw */
+		I915_WRITE(GEN8_L3SQCREG4, I915_READ(GEN8_L3SQCREG4) |
+			   GEN8_PIPELINE_FLUSH_COHERENT_LINES);
+
+		/* WaDisableMidThreadPreempt:bdw */
+		I915_WRITE(GEN8_FF_SLICE_CS_CHICKEN2,
+			   I915_READ(GEN8_FF_SLICE_CS_CHICKEN2) |
+			   _MASKED_BIT_ENABLE(GEN8_THREAD_GROUP_PREEMPTION));
+	}
+
+	I915_WRITE(0xb10c, (I915_READ(0xb10c) & ~(0xf << 20)) | (0x8 << 20));
 
 	lpt_init_clock_gating(dev);
 }

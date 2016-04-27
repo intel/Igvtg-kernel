@@ -1,0 +1,609 @@
+#!/usr/bin/python
+
+#Copyright (c) 2013, Intel Corporation.
+#
+#This program is free software; you can redistribute it and/or modify it
+#under the terms and conditions of the GNU General Public License,
+#version 2, as published by the Free Software Foundation.
+#
+#This program is distributed in the hope it will be useful, but WITHOUT
+#ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+#FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+#more details.
+#
+#You should have received a copy of the GNU General Public License along with
+#this program; if not, write to the Free Software Foundation, Inc., 
+#51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
+
+import os, sys, re
+import time
+import shlex, subprocess
+import fileinput
+from optparse import OptionParser
+from subprocess import *
+
+parser = OptionParser()
+parser.add_option("-i", "--vmid", dest="vmid", type="int",
+		   help="Specify the instance id to be sampled")
+parser.add_option("-t", "--timeout", dest="timeout", type="int",
+		   help="Timeout in seconds")
+parser.add_option("-v", "--verbose", dest="verbose",
+		   help="print status message", action="store_true")
+
+(options, args) = parser.parse_args()
+if options.verbose:
+	print (options, args)
+
+#from stackoverflow
+class Tee(object):
+	def __init__(self, *files):
+		self.files = files
+	def write(self, obj):
+		for f in self.files:
+			f.write(obj)
+
+tag = long(time.time())
+e = {}
+# check environment
+path_vgt = "/sys/kernel/debug/vgt"
+path_gpu = "/sys/kernel/debug/dri/0/i915_cur_delayinfo"
+xen_flag = True
+e["sample_top"] = True
+e["sample_vm"] = True
+e["sample_gpu"] = True
+e["sample_mmio"] = True
+
+if os.path.exists(path_vgt):
+	if os.path.isfile("/var/run/xenstored.pid"):
+		print "Running in XenGT environment..."
+	else:
+		xen_flag = False
+		print "Running in KVMGT environment..."
+		e["sample_vm"] = False
+		e["sample_mmio"] = False
+elif os.path.exists(path_gpu):
+	print "Running in Native or VM environment..."
+	e["sample_vm"] = False
+	e["sample_mmio"] = False
+else:
+	print "Running in VT-d environment"
+	e["sample_gpu"] = False
+	e["sample_mmio"] = False
+
+if xen_flag:
+	e["log_top"] = "/tmp/xengt.top.%ld" % tag
+	e["log_xentop"] = '/tmp/xengt.xentop.%ld' % tag
+	e["log_gpu"] = '/tmp/xengt.gpu.%ld' % tag
+	e["log_file"] = '/tmp/xengt.log.%ld' % tag
+	e["log_vm"] = '/tmp/xengt.vm.%ld' % tag
+else:
+	e["log_top"] = "/tmp/kvmgt.top.%ld" % tag
+	e["log_gpu"] = '/tmp/kvmgt.gpu.%ld' % tag
+	e["log_file"] = '/tmp/kvmgt.log.%ld' % tag
+
+# output to both console and logfile
+e["logf"] = open(e["log_file"], "w")
+e["old_stdout"] = sys.stdout
+sys.stdout = Tee(sys.stdout, e["logf"])
+
+print "TAG: %ld (logfile: %s)" % (tag, e["log_file"])
+
+e["timeout"] = 360 
+if options.timeout:
+	e["timeout"] = options.timeout
+print "Timeout: %d" % e["timeout"]
+
+def err_exit(e, msg):
+	print "Clean up environment on error (%s)" % msg
+	if "p_top" in e:
+		e["p_top"].terminate()
+	if "top_file" in e:	
+		e["top_file"].close()
+	if "p_xentop" in e:
+		e["p_xentop"].terminate()
+	if "xentop_file" in e:
+		e["xentop_file"].close()
+	if "p_gpu" in e:
+		e["p_gpu"].terminate()
+	if "gpu_file" in e:
+		e["gpu_file"].close()
+	sys.stdout = e["old_stdout"]
+	e["logf"].close()
+	sys.exit()
+
+cpu_num = 0
+cpu_mhz = ""
+for line in fileinput.input("/proc/cpuinfo"):
+	m = re.search("^processor[ \t]*:", line)
+	if m:
+		cpu_num += 1
+		continue
+
+	if not cpu_mhz:
+		m = re.search("cpu MHz[ \t].: (?P<freq>[0-9\.]*)", line)
+		if m:
+			cpu_mhz = m.group("freq")
+			continue
+
+if cpu_num == 0 or not cpu_mhz:
+	err_exit(e, "Failed to get cpu num(%d) and cpu_mhz(%s))" % (cpu_num, cpu_mhz))
+
+e["cpu_num"] = cpu_num
+e["cpu_mhz"] = cpu_mhz
+e["cpu_freq"] = long(float(cpu_mhz) * 1000000)
+
+print "Detecting %d cpus (%sMHz)" % (cpu_num, cpu_mhz)
+
+e["dom_info"] = {}
+if e["sample_vm"]:
+	os.system("xl list > %s" % e["log_vm"])
+	for line in fileinput.input(e["log_vm"]):
+		if line.find("VCPUs") != -1:
+			continue
+
+		m = re.search("(?P<name>[^ ^\t]+)[ \t]*(?P<id>[0-9]+)", line)
+		if not m:
+			err_exit(e, "Confusing VM info: %s" % line)
+
+		e["dom_info"][int(m.group("id"))] = m.group("name")
+
+e["vmid"] = -1
+if options.vmid:
+	e["vmid"] = int(options.vmid)
+
+def read_gen_perf_stat(node):
+	fi = open(path_vgt + '/' + node, "r")
+	s = fi.read()
+	fi.close()
+	return long(s)
+
+def get_gen_stat(gs):
+	gs['context_switch_cycles'] = read_gen_perf_stat('context_switch_cycles')
+	gs['context_switch_num'] = read_gen_perf_stat('context_switch_num')
+	gs['ring_idle_wait'] = read_gen_perf_stat('ring_idle_wait')
+
+def read_vm_perf_stat(vmid, node):
+	fi = open(path_vgt + ('/vm%d' % vmid) + '/perf/' + node, "r")
+	s = fi.read()
+	fi.close()
+	return long(s)
+
+state_nodes = {
+	"Allocated GPU cycles" : {
+		"node"	: "allocated_",
+		"count" : 0,
+		"cycles": 1,
+	},
+	"GTT reads" : {
+		"node"	: "gtt_mmio_r",
+		"count" : 1,
+		"cycles": 1,
+	},
+	"GTT writes" : {
+		"node"	: "gtt_mmio_w",
+		"count" : 1,
+		"cycles": 1,
+	},
+	"WP writes" : {
+		"node"	: "wp_",
+		"count" : 1,
+		"cycles": 1,
+	},
+	"PPGTT WP writes" : {
+		"node"	: "ppgtt_wp_",
+		"count" : 1,
+		"cycles": 1,
+	},
+	"PPGTT guest page find hit" : {
+		"node"	: "gpt_find_hit_",
+		"count" : 1,
+		"cycles": 1,
+	},
+	"PPGTT guest page find miss" : {
+		"node"	: "gpt_find_miss_",
+		"count" : 1,
+		"cycles": 1,
+	},
+	"PPGTT shadow page find hit" : {
+		"node"	: "spt_find_hit_",
+		"count" : 1,
+		"cycles": 1,
+	},
+	"PPGTT shadow page find miss" : {
+		"node"	: "spt_find_miss_",
+		"count" : 1,
+		"cycles": 1,
+	},
+	"MMIO reads" : {
+		"node"	: "mmio_r",
+		"count" : 1,
+		"cycles": 1,
+	},
+	"MMIO writes" : {
+		"node"	: "mmio_w",
+		"count" : 1,
+		"cycles": 1,
+	},
+	"Ring MMIO reads" : {
+		"node"	: "ring_mmio_r",
+		"count" : 1,
+		"cycles": 0,
+	},
+	"Ring MMIO writes" : {
+		"node"	: "ring_mmio_w",
+		"count" : 1,
+		"cycles": 0,
+	},
+	"Ring tail writes" : {
+		"node"	: "ring_tail_mmio_w",
+		"count" : 1,
+		"cycles": 1,
+	},
+	"CMD scans" : {
+		"node"	: "vring_scan_",
+		"count" : 1,
+		"cycles": 1,
+	},
+	"Skipped batch buffers" : {
+		"node"	: "skip_bb_",
+		"count"	: 1,
+		"cycles": 0,
+	},
+	#"PM accesses" : {
+	#	"node" 	: "mmio_pm_",
+	#	"count"	: 1,
+	#	"cycles": 0,
+	#},
+	#"IRQ accesses" : {
+	#	"node" 	: "mmio_irq_",
+	#	"count"	: 1,
+	#	"cycles": 0,
+	#},
+}
+
+def get_vm_stat(vs, vmid):
+	for key in state_nodes.keys():
+		node = state_nodes[key]
+		count = node["node"] + 'cnt'
+		cycles = node["node"] + 'cycles'
+		if node["count"]:
+			vs[count] = read_vm_perf_stat(vmid, count)
+		if node["cycles"]:
+			vs[cycles] = read_vm_perf_stat(vmid, cycles)
+		else:
+			vs[cycles] = 0
+	vs['total_cmds'] = read_vm_perf_stat(vmid, 'total_cmds')
+
+def collect_vm_stat(e):
+	print "Collecting vgt statistics..."
+	s = {}
+	s['general'] = {}
+	get_gen_stat(s['general'])
+
+	for path in os.listdir(path_vgt):
+		m = re.search("^vm(?P<id>[0-9]+)$", path)
+		if not m:
+			continue
+		id = int(m.group("id"))
+		if id in e["dom_info"]:
+			if id in s:
+				err_exit(e, "Instance(vm%d) already exists!!!" % id)
+			if e["vmid"] != -1 and e["vmid"] != id:
+				print "Skip instance vm%d" % id
+				continue
+			print "Find an instance (vm%d), collecting..." % id
+			s[id] = {}
+			get_vm_stat(s[id], id)
+		else:
+			err_exit(e, "Instance(vm%d) not listed before!!!" % id)
+
+	if e["vmid"] != -1 and not e["vmid"] in s:
+		err_exit(e, "Failed to find instance (vm%s)!!!" % e["vmid"])
+
+	return s
+
+def calculate_vm_stat_delta(e, s1, s2, t):
+	if s1.keys() != s2.keys():
+		err_exit(e, "Unmatched VM instances before/after sampling!" + s1.keys() + s2.keys())
+
+	s = {}
+	for key in s1.keys():
+		s[key] = {}
+		for attr in s1[key].keys():
+			s[key][attr] = (s2[key][attr] - s1[key][attr])/t
+	return s
+
+def percentage(v1, v2):
+	residue = (v1 * 100) / v2
+	remainder = (((v1 * 100) % v2) * 100) / v2
+	return "%ld.%02ld%%" % (residue, remainder)
+
+def avg(cnt, cycles):
+	if not cnt:
+		return 0
+	return cycles/cnt
+
+format1 = "%-32s %-16s %-16s %-16s %-8s %-8s"
+format2 = "%-32s %-16ld %-16ld %-16ld %-8s %-8s" 
+bias_vm=20000
+bias_dom0=1500
+
+def print_param2(e, vs, type, bias):
+	if not type in state_nodes:
+		print "Unknown stat (%s)\n" % type
+		return
+
+	count = state_nodes[type]["node"] + 'cnt'
+	cycles = state_nodes[type]["node"] + 'cycles'
+	print format2 % (type, vs[count], vs[cycles],
+			 avg(vs[count], vs[cycles]),
+			 percentage(vs[cycles], e["cpu_freq"]),
+			 percentage(bias * vs[count] + vs[cycles], e["cpu_freq"]))
+
+def print_gpu_cycles(e, vs, bias):
+	type = "Allocated GPU cycles"
+	if not type in state_nodes:
+		print "Unknown stat (%s)\n" % type
+		return
+
+	count = 0
+	cycles = state_nodes[type]["node"] + 'cycles'
+	print format2 % (type, count, vs[cycles],
+			 avg(count, vs[cycles]),
+			 '/', '/')
+
+def print_cmd_stats(e, vs, bias):
+	count = vs['total_cmds']
+	cycles = vs['vring_scan_cycles']
+	avg_cycles = avg(count, cycles)
+	avg_cmds = 0
+	if vs['vring_scan_cnt']:
+		avg_cmds = vs['total_cmds']/vs['vring_scan_cnt']
+	print "Scanned CMDs: %ld" % vs['total_cmds']
+	print "cycles per CMD scan: %ld" % avg_cycles
+	print "CMDs per scan: %ld" % avg_cmds
+	print "Skipped batch buffers: %ld" % vs['skip_bb_cnt'] 
+
+def show_result(e, s, r, time):
+	print "===================================="
+	print "Elapsed time: %ds (%ld cycles), CPU MHz(%s)" % (time, time * e["cpu_freq"], e["cpu_mhz"])
+
+	if e["sample_gpu"]:
+		print "----"
+		print "GPU: %dMHz" % r['gpu_freq']
+
+	if e["sample_vm"]:
+		print "----"
+		for id in e["dom_info"]:
+			print "[xentop]vm%s: %2.2f%%" % (id, r[id])
+
+	if e["sample_top"]:
+		print "----"
+		total_usage = 0
+		print "[top]%16s : %2.2f%%" % ("Total CPU%", (100.0 - r['dom0_idle']) * e["cpu_num"])
+		count = 6
+		for cmd, val in sorted(r['procs'].iteritems(), key=lambda(k, v): (v, k), reverse=True):
+			if not count or val == 0:
+				break
+			count -= 1
+			print "[top]%16s : %s%%" % (cmd, val)
+			total_usage += val
+		print "----"
+		print "[top]%16s : %2.2f%%" % ("Total CPU usage%", total_usage)
+
+	if not e["sample_mmio"]:
+		return
+
+	print "----"
+	gen = s['general']
+	print "Context switches: %ld (%ld cycles, %s)" % (gen['context_switch_num'], gen['context_switch_cycles'], percentage(gen['context_switch_cycles'], time * e["cpu_freq"]))
+	print "Avg context switch overhead: %ld" % avg(gen['context_switch_num'], gen['context_switch_cycles'])
+	print "Avg ring wait idle overhead: %ld" % avg(gen['context_switch_num'], gen['ring_idle_wait'])
+	for id in e["dom_info"]:
+		if e["vmid"] != -1 and e["vmid"] != id:
+			continue
+
+		if id == 0:
+			bias = bias_dom0
+		else:
+			bias = bias_vm
+
+		vs = s[id]
+		print "----------------------------vm%d--------------------" % id
+		print format1 % ("Type", "Count", "Cycles", "Avg", "CPU%", "CPU%(bias)")
+		print format1 % ("----", "----", "----", "----", "----", "----")
+
+		print_gpu_cycles(e, vs, bias)
+		print_param2(e, vs, "MMIO reads", bias)
+		print_param2(e, vs, "MMIO writes", bias)
+		print_param2(e, vs, "GTT reads", bias)
+		print_param2(e, vs, "GTT writes", bias)
+		print_param2(e, vs, "WP writes", bias)
+		print_param2(e, vs, "PPGTT WP writes", bias)
+		print_param2(e, vs, "PPGTT guest page find hit", bias)
+		print_param2(e, vs, "PPGTT guest page find miss", bias)
+		print_param2(e, vs, "PPGTT shadow page find hit", bias)
+		print_param2(e, vs, "PPGTT shadow page find miss", bias)
+		#print_param2(e, vs, "PM accesses", bias)
+		#print_param2(e, vs, "IRQ accesses", bias)
+		#print_param2(vs, "Emulations", freq, bias)
+
+		print "----"
+		print_param2(e, vs, "Ring tail writes", bias)
+		print_param2(e, vs, "CMD scans", bias)
+		print "----"
+		print_cmd_stats(e, vs, bias)
+
+def analyze_output(path, pattern, key):
+	items = []
+	#print pattern
+	for line in fileinput.input(path):
+		m = re.search(pattern, line)
+		if not m:
+			continue
+		items.append(m.group(key))
+		#print m.group(key)
+	return items
+
+def get_avg_util_int(s):
+	count = 0
+	tot = 0
+	for item in s:
+		if item == '0' or item == '0.0':
+			continue
+		tot += int(item)
+		count += 1
+
+	if count:
+		#print tot, count, tot/count
+		return tot / count
+	else:
+		return 0
+
+def get_avg_util_float(s):
+	count = 0
+	tot = 0.0
+	first = 0.0
+	for item in s:
+		if item == '0' or item == '0.0':
+			continue
+		tot += float(item)
+		count += 1
+		if count == 1:
+			first = float(item)
+
+	if count:
+		#print tot, count, tot/count
+		count -= 1
+		tot -= first
+		if count:
+			return tot / count
+		else:
+			return 0
+	else:
+		return 0
+
+def calculate_utilization(e):
+	r = {}
+
+	if e["sample_gpu"]:
+		gpu_freqs = analyze_output(e["log_gpu"], "^CAGF: (?P<freq>[0-9]*)MHz$", "freq")
+		r['gpu_freq'] = get_avg_util_int(gpu_freqs)
+
+	if e["sample_top"]:
+		idle_data = analyze_output(e["log_top"], "Cpu\(s\):.*, (?P<idle>[0-9]+\.[0-9]+)\%id", "idle")
+		r['dom0_idle'] = get_avg_util_float(idle_data)
+		
+		count = 0
+		iter = 0
+		cmds = {}
+		for line in fileinput.input(e["log_top"]):
+			if line.find("top -") >= 0:
+				count += 1
+				compare = False
+				continue
+		
+			if line.find("PID USER") >= 0:
+				compare = True
+				continue
+		
+			if not compare:
+				continue
+		
+			m = re.search(" *\w+ +\w+ +\w+ +[\w\-]+ +[\w\.]+ +[\w\.]+ +[\w\.]+ +\w+ +(?P<cpu>[0-9\.]+) +[0-9\.]+ +[0-9\:\.]+ +(?P<cmd>[^ ]+)", line)
+			if not m:
+				continue;
+		
+			if m.group("cmd") not in cmds:
+				cmds[m.group("cmd")] = []
+			cmds[m.group("cmd")].append(m.group("cpu"))
+		
+		r['procs'] = {}
+		for cmd in cmds.keys():
+			tot = 0
+			for var in cmds[cmd]:
+				tot += int(float(var))
+			r['procs'][cmd] = tot / count
+
+	if not e["sample_vm"]:
+		return r
+
+	for id in e["dom_info"]:
+		r[id] = {}
+	 	dom_utils = analyze_output(e["log_xentop"], "^[ ]+%s[ ]+[a-z\-]+[ ]+[0-9]+[ ]+(?P<cpu>[0-9]+\.[0-9]+)" % e["dom_info"][id], "cpu")
+
+		r[id] = get_avg_util_float(dom_utils)
+		#print key, r[key]
+
+	return r
+
+stat1 = {}
+stat2 = {}
+stat = {}
+count = 0
+#fi = open("/sys/kernel/debug/dri/0/i915_cur_delayinfo", "r")
+#freq += read_freq(fi)
+
+print "Wait for %d seconds..." % e["timeout"]
+
+if e["sample_top"]:
+	line = "/usr/bin/top -b -d 1"
+	args = shlex.split(line)
+	e["top_file"] = open(e["log_top"], "w")
+	e["p_top"] = subprocess.Popen(args, stdout = e["top_file"])
+
+if e["sample_vm"]:
+	line = "/usr/sbin/xentop -b -d 1"
+	args = shlex.split(line)
+	e["xentop_file"] = open(e["log_xentop"], "w")
+	e["p_xentop"] = subprocess.Popen(args, stdout = e["xentop_file"])
+
+if e["sample_gpu"]:
+	if os.path.isfile('/usr/bin/gpu_freq'):
+		os.remove('/usr/bin/gpu_freq')
+	f = open('/usr/bin/gpu_freq', "w")
+	#f.write("\#/bin/sh")
+	#f.write("\n")
+	if os.path.exists(path_gpu):
+		f.write(' while true; do cat /sys/kernel/debug/dri/0/i915_cur_delayinfo | grep CAGF; sleep 1; done')
+	else:
+		f.write(' while true; do cat /sys/kernel/debug/dri/0/i915_frequency_info | grep CAGF; sleep 1; done')
+	f.close()
+	line = "/bin/sh /usr/bin/gpu_freq"
+	args = shlex.split(line)
+	e["gpu_file"] = open(e["log_gpu"], "w")
+	e["p_gpu"] = subprocess.Popen(args, stdout = e["gpu_file"])
+
+if e["sample_mmio"]:
+	stat1 = collect_vm_stat(e)
+
+t1 = time.time()
+try:
+	time.sleep(e["timeout"])
+except KeyboardInterrupt:
+	print "Interrupted"
+t2 = time.time()
+
+if e["sample_mmio"]:
+	stat2 = collect_vm_stat(e)
+
+if e["sample_top"]:
+	e["p_top"].terminate()
+	e["top_file"].close()
+if e["sample_vm"]:
+	e["p_xentop"].terminate()
+	e["xentop_file"].close()
+if e["sample_gpu"]:
+	e["p_gpu"].terminate()
+	e["gpu_file"].close()
+
+print "Analyze result...\n\n\n"
+elapsed = int(t2 - t1)
+if e["sample_mmio"]:
+	stat = calculate_vm_stat_delta(e, stat1, stat2, elapsed)
+
+stat_r = calculate_utilization(e)
+show_result(e, stat, stat_r, elapsed)
+
+sys.stdout = e["old_stdout"]
+e["logf"].close()

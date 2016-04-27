@@ -135,6 +135,7 @@
 #include <drm/drmP.h>
 #include <drm/i915_drm.h>
 #include "i915_drv.h"
+#include "i915_vgpu.h"
 #include "intel_mocs.h"
 
 #define GEN9_LR_CONTEXT_RENDER_SIZE (22 * PAGE_SIZE)
@@ -207,6 +208,7 @@ enum {
 	ADVANCED_AD_CONTEXT,
 	LEGACY_64B_CONTEXT
 };
+#define GEN8_CTX_MODE_SHIFT 3
 #define GEN8_CTX_ADDRESSING_MODE_SHIFT 3
 #define GEN8_CTX_ADDRESSING_MODE(dev)  (USES_FULL_48BIT_PPGTT(dev) ?\
 		LEGACY_64B_CONTEXT :\
@@ -248,7 +250,7 @@ int intel_sanitize_enable_execlists(struct drm_device *dev, int enable_execlists
 	if (INTEL_INFO(dev)->gen >= 9)
 		return 1;
 
-	if (enable_execlists == 0)
+	if (enable_execlists == 0 && !intel_vgpu_active(dev))
 		return 0;
 
 	if (HAS_LOGICAL_RING_CONTEXTS(dev) && USES_PPGTT(dev) &&
@@ -288,7 +290,6 @@ static bool disable_lite_restore_wa(struct intel_engine_cs *ring)
 		IS_BXT_REVID(dev, 0, BXT_REVID_A0)) &&
 	       (ring->id == VCS || ring->id == VCS2);
 }
-
 uint64_t intel_lr_context_descriptor(struct intel_context *ctx,
 				     struct intel_engine_cs *ring)
 {
@@ -327,6 +328,7 @@ static void execlists_elsp_write(struct drm_i915_gem_request *rq0,
 	struct drm_device *dev = ring->dev;
 	struct drm_i915_private *dev_priv = dev->dev_private;
 	uint64_t desc[2];
+	bool force_wake = !(intel_vgpu_active(ring->dev) || i915_host_mediate);
 
 	if (rq1) {
 		desc[1] = intel_lr_context_descriptor(rq1->ctx, rq1->ring);
@@ -338,9 +340,11 @@ static void execlists_elsp_write(struct drm_i915_gem_request *rq0,
 	desc[0] = intel_lr_context_descriptor(rq0->ctx, rq0->ring);
 	rq0->elsp_submitted++;
 
+	if (force_wake) {
+		spin_lock(&dev_priv->uncore.lock);
+		intel_uncore_forcewake_get__locked(dev_priv, FORCEWAKE_ALL);
+	}
 	/* You must always write both descriptors in the order below. */
-	spin_lock(&dev_priv->uncore.lock);
-	intel_uncore_forcewake_get__locked(dev_priv, FORCEWAKE_ALL);
 	I915_WRITE_FW(RING_ELSP(ring), upper_32_bits(desc[1]));
 	I915_WRITE_FW(RING_ELSP(ring), lower_32_bits(desc[1]));
 
@@ -350,8 +354,11 @@ static void execlists_elsp_write(struct drm_i915_gem_request *rq0,
 
 	/* ELSP is a wo register, use another nearby reg for posting */
 	POSTING_READ_FW(RING_EXECLIST_STATUS_LO(ring));
-	intel_uncore_forcewake_put__locked(dev_priv, FORCEWAKE_ALL);
-	spin_unlock(&dev_priv->uncore.lock);
+
+	if (force_wake) {
+		intel_uncore_forcewake_put__locked(dev_priv, FORCEWAKE_ALL);
+		spin_unlock(&dev_priv->uncore.lock);
+	}
 }
 
 static int execlists_update_context(struct drm_i915_gem_request *rq)
@@ -557,7 +564,7 @@ void intel_lrc_irq_handler(struct intel_engine_cs *ring)
 	I915_WRITE(RING_CONTEXT_STATUS_PTR(ring),
 		   _MASKED_FIELD(GEN8_CSB_PTR_MASK << 8,
 				 ((u32)ring->next_context_status_buffer &
-				  GEN8_CSB_PTR_MASK) << 8));
+				  GEN8_CSB_PTR_MASK) << 8) | 0x07000000);
 }
 
 static int execlists_context_queue(struct drm_i915_gem_request *request)
@@ -719,23 +726,33 @@ static int logical_ring_wait_for_space(struct drm_i915_gem_request *req,
  * on a queue waiting for the ELSP to be ready to accept a new context submission. At that
  * point, the tail *inside* the context is updated and the ELSP written to.
  */
-static void
+static int
 intel_logical_ring_advance_and_submit(struct drm_i915_gem_request *request)
 {
-	struct intel_engine_cs *ring = request->ring;
+	struct intel_ringbuffer *ringbuf = request->ringbuf;
 	struct drm_i915_private *dev_priv = request->i915;
 
-	intel_logical_ring_advance(request->ringbuf);
+	intel_logical_ring_advance(ringbuf);
 
-	request->tail = request->ringbuf->tail;
+	request->tail = ringbuf->tail;
 
-	if (intel_ring_stopped(ring))
-		return;
+	/*
+	 * Here we add two extra NOOPs as padding to avoid
+	 * lite restore of a context with HEAD==TAIL.
+	 */
+	intel_logical_ring_emit(ringbuf, MI_NOOP);
+	intel_logical_ring_emit(ringbuf, MI_NOOP);
+	intel_logical_ring_advance(ringbuf);
+
+	if (intel_ring_stopped(request->ring))
+		return 0;
 
 	if (dev_priv->guc.execbuf_client)
 		i915_guc_submit(dev_priv->guc.execbuf_client, request);
 	else
 		execlists_context_queue(request);
+
+	return 0;
 }
 
 static void __wrap_ring_buffer(struct intel_ringbuffer *ringbuf)
@@ -1816,17 +1833,7 @@ static int gen8_emit_request(struct drm_i915_gem_request *request)
 	intel_logical_ring_emit(ringbuf, i915_gem_request_get_seqno(request));
 	intel_logical_ring_emit(ringbuf, MI_USER_INTERRUPT);
 	intel_logical_ring_emit(ringbuf, MI_NOOP);
-	intel_logical_ring_advance_and_submit(request);
-
-	/*
-	 * Here we add two extra NOOPs as padding to avoid
-	 * lite restore of a context with HEAD==TAIL.
-	 */
-	intel_logical_ring_emit(ringbuf, MI_NOOP);
-	intel_logical_ring_emit(ringbuf, MI_NOOP);
-	intel_logical_ring_advance(ringbuf);
-
-	return 0;
+	return intel_logical_ring_advance_and_submit(request);
 }
 
 static int intel_lr_context_render_state_init(struct drm_i915_gem_request *req)
@@ -2225,6 +2232,23 @@ make_rpcs(struct drm_device *dev)
 	return rpcs;
 }
 
+static void intel_lr_context_notify_vgt(struct intel_context *ctx,
+					struct intel_engine_cs *ring,
+					int msg)
+{
+	struct drm_device *dev = ring->dev;
+	struct drm_i915_private *dev_priv = dev->dev_private;
+
+	u64 tmp = intel_lr_context_descriptor(ctx, ring);
+
+	I915_WRITE(vgt_info_off(execlist_context_descriptor_lo),
+			tmp & 0xffffffff);
+	I915_WRITE(vgt_info_off(execlist_context_descriptor_hi),
+			tmp >> 32);
+
+	I915_WRITE(vgt_info_off(g2v_notify), msg);
+}
+
 static int
 populate_lr_context(struct intel_context *ctx, struct drm_i915_gem_object *ctx_obj,
 		    struct intel_engine_cs *ring, struct intel_ringbuffer *ringbuf)
@@ -2385,6 +2409,12 @@ void intel_lr_context_free(struct intel_context *ctx)
 					ctx->engine[i].ringbuf;
 			struct intel_engine_cs *ring = ringbuf->ring;
 
+			if (intel_vgpu_active(ringbuf->ring->dev)) {
+				intel_lr_context_notify_vgt(ctx, ring,
+						VGT_G2V_EXECLIST_CONTEXT_ELEMENT_DESTROY);
+				i915_gem_object_ggtt_unpin(ctx_obj);
+			}
+
 			if (ctx == ring->default_context) {
 				intel_unpin_ringbuffer_obj(ringbuf);
 				i915_gem_object_ggtt_unpin(ctx_obj);
@@ -2489,6 +2519,18 @@ int intel_lr_context_deferred_alloc(struct intel_context *ctx,
 
 	ctx->engine[ring->id].ringbuf = ringbuf;
 	ctx->engine[ring->id].state = ctx_obj;
+
+	if (intel_vgpu_active(ring->dev)) {
+		/* Allocate VMA instantly. */
+		ret = i915_gem_obj_ggtt_pin(ctx_obj, GEN8_LR_CONTEXT_ALIGN, 0);
+		if (ret) {
+			DRM_DEBUG_DRIVER("Pin LRC backing obj failed: %d\n",
+					ret);
+			return ret;
+		}
+		intel_lr_context_notify_vgt(ctx, ring,
+				VGT_G2V_EXECLIST_CONTEXT_ELEMENT_CREATE);
+	}
 
 	if (ctx != ring->default_context && ring->init_context) {
 		struct drm_i915_gem_request *req;

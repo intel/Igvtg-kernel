@@ -47,3 +47,19 @@ config DRM_I915_PRELIMINARY_HW_SUPPORT
 	  option changes the default for that module option.
 
 	  If in doubt, say "N".
+
+config I915_VGT
+	bool "iGVT-g vGT driver of i915"
+	depends on DRM_I915 && X86_64
+	select IRQ_WORK
+	default y
+	help
+	  Enabling vGT mediated graphics passthrough technique for Intel i915
+	  based integrated graphics card. With vGT, it's possible to have one
+	  integrated i915 device shared by multiple VMs. Performance critical
+	  opterations such as apperture accesses and ring buffer operations
+	  are pass-throughed to VM, with a minimal set of conflicting resources
+	  (e.g. display settings) mediated by vGT driver. The benefit of vGT
+	  is on both the performance, given that each VM could directly operate
+	  its aperture space and submit commands like running on native, and
+	  the feature completeness, given that a true GEN hardware is exposed.
