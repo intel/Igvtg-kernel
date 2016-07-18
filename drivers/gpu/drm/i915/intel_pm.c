@@ -4219,38 +4219,74 @@ static void gen6_set_rps_thresholds(struct drm_i915_private *dev_priv, u8 val)
 		return;
 
 	/* Note the units here are not exactly 1us, but 1280ns. */
-	switch (new_power) {
-	case LOW_POWER:
-		/* Upclock if more than 95% busy over 16ms */
-		ei_up = 16000;
-		threshold_up = 95;
+	if (!i915_host_mediate) {
+		switch (new_power) {
+		case LOW_POWER:
+			/* Upclock if more than 95% busy over 16ms */
+			ei_up = 16000;
+			threshold_up = 95;
 
-		/* Downclock if less than 85% busy over 32ms */
-		ei_down = 32000;
-		threshold_down = 85;
-		break;
+			/* Downclock if less than 85% busy over 32ms */
+			ei_down = 32000;
+			threshold_down = 85;
+			break;
 
-	case BETWEEN:
-		/* Upclock if more than 90% busy over 13ms */
-		ei_up = 13000;
-		threshold_up = 90;
+		case BETWEEN:
+			/* Upclock if more than 90% busy over 13ms */
+			ei_up = 13000;
+			threshold_up = 90;
 
-		/* Downclock if less than 75% busy over 32ms */
-		ei_down = 32000;
-		threshold_down = 75;
-		break;
+			/* Downclock if less than 75% busy over 32ms */
+			ei_down = 32000;
+			threshold_down = 75;
+			break;
 
-	case HIGH_POWER:
-		/* Upclock if more than 85% busy over 10ms */
-		ei_up = 10000;
-		threshold_up = 85;
+		case HIGH_POWER:
+			/* Upclock if more than 85% busy over 10ms */
+			ei_up = 10000;
+			threshold_up = 85;
 
-		/* Downclock if less than 60% busy over 32ms */
-		ei_down = 32000;
-		threshold_down = 60;
-		break;
+			/* Downclock if less than 60% busy over 32ms */
+			ei_down = 32000;
+			threshold_down = 60;
+			break;
+		}
+
+	} else {
+		/* add separated rps threshold policy in GVT-g host */
+		switch (new_power) {
+		case LOW_POWER:
+			/* Upclock if more than 80% busy over 16ms */
+			ei_up = 16000;
+			threshold_up = 80;
+
+			/* Downclock if less than 60% busy over 32ms */
+			ei_down = 32000;
+			threshold_down = 60;
+			break;
+
+		case BETWEEN:
+			/* Upclock if more than 75% busy over 13ms */
+			ei_up = 13000;
+			threshold_up = 75;
+
+			/* Downclock if less than 55% busy over 32ms */
+			ei_down = 32000;
+			threshold_down = 55;
+			break;
+
+		case HIGH_POWER:
+			/* Upclock if more than 70% busy over 10ms */
+			ei_up = 10000;
+			threshold_up = 70;
+
+			/* Downclock if less than 40% busy over 32ms */
+			ei_down = 32000;
+			threshold_down = 40;
+			break;
+		}
+
 	}
-
 	I915_WRITE(GEN6_RP_UP_EI,
 		GT_INTERVAL_FROM_US(dev_priv, ei_up));
 	I915_WRITE(GEN6_RP_UP_THRESHOLD,

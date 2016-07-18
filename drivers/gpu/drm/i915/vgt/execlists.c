@@ -694,6 +694,20 @@ static void update_shadow_regstate_from_guest(struct vgt_device *vgt,
 	src_ctx = (struct reg_state_ctx_header *)src;
 	ref_ctx = el_ctx->g_ctx_buf;
 
+	/* always need to update the indirect_ctx and bb_per_ctx value in
+	 * shadow context.
+	 */
+	if (shadow_indirect_ctx_bb) {
+		dest_ctx->rcs_indirect_ctx.val =
+			(dest_ctx->rcs_indirect_ctx.val &
+				(~INDIRECT_CTX_ADDR_MASK)) |
+				el_ctx->shadow_indirect_ctx.shadow_ctx_base;
+		dest_ctx->bb_per_ctx_ptr.val =
+			(dest_ctx->bb_per_ctx_ptr.val &
+				(~BB_PER_CTX_ADDR_MASK)) |
+				el_ctx->shadow_bb_per_ctx.shadow_bb_base;
+	}
+
 	if (tail_only) {
 		dest_ctx->ring_tail.val = src_ctx->ring_tail.val;
 		return;
@@ -737,17 +751,6 @@ static void update_shadow_regstate_from_guest(struct vgt_device *vgt,
 	/* update the shadow fields */
 	if (shadow_cmd_buffer)
 		dest_ctx->rb_start.val = el_ctx->shadow_rb.shadow_rb_base;
-
-	if (shadow_indirect_ctx_bb) {
-		dest_ctx->rcs_indirect_ctx.val =
-			(dest_ctx->rcs_indirect_ctx.val &
-				(~INDIRECT_CTX_ADDR_MASK)) |
-				el_ctx->shadow_indirect_ctx.shadow_ctx_base;
-		dest_ctx->bb_per_ctx_ptr.val =
-			(dest_ctx->bb_per_ctx_ptr.val &
-				(~BB_PER_CTX_ADDR_MASK)) |
-				el_ctx->shadow_bb_per_ctx.shadow_bb_base;
-	}
 
 	ppgtt_update_shadow_ppgtt_for_ctx(vgt, el_ctx);
 }
@@ -1383,10 +1386,13 @@ static inline void vgt_add_ctx_switch_status(struct vgt_device *vgt, enum vgt_ri
 			struct context_status_format *ctx_status)
 {
 	uint32_t ctx_status_reg;
+	uint32_t ctx_ptr_reg;
+	struct ctx_st_ptr_format ctx_ptr_val;
 	uint32_t write_idx;
 	uint32_t offset;
 
 	ctx_status_reg = el_ring_mmio(ring_id, _EL_OFFSET_STATUS_BUF);
+	ctx_ptr_reg = el_ring_mmio(ring_id, _EL_OFFSET_STATUS_PTR);
 
 	write_idx = vgt->rb[ring_id].csb_write_ptr;
 	if (write_idx == DEFAULT_INV_SR_PTR) {
@@ -1402,6 +1408,12 @@ static inline void vgt_add_ctx_switch_status(struct vgt_device *vgt, enum vgt_ri
 	__vreg(vgt, offset + 4) = ctx_status->udw;
 
 	vgt->rb[ring_id].csb_write_ptr = write_idx;
+
+	ctx_ptr_val.dw = __vreg(vgt, ctx_ptr_reg);
+	ctx_ptr_val.status_buf_write_ptr = write_idx;
+	__vreg(vgt, ctx_ptr_reg) = ctx_ptr_val.dw;
+
+	vgt->rb[ring_id].csb_has_update = true;
 }
 
 static void vgt_emulate_context_status_change(struct vgt_device *vgt,
@@ -2042,7 +2054,6 @@ bool vgt_idle_execlist(struct pgt_device *pdev, enum vgt_ring_id ring_id)
 	struct execlist_status_format el_status;
 	uint32_t ctx_ptr_reg;
 	struct ctx_st_ptr_format ctx_st_ptr;
-	struct ctx_st_ptr_format guest_ctx_st_ptr;
 	struct context_status_format ctx_status;
 	uint32_t ctx_status_reg = el_ring_mmio(ring_id, _EL_OFFSET_STATUS_BUF);
 	unsigned long last_csb_reg_offset;
@@ -2071,15 +2082,13 @@ bool vgt_idle_execlist(struct pgt_device *pdev, enum vgt_ring_id ring_id)
 		return false;
 
 	/* check Guest ctx status pointers, make sure guest already received last irq update */
-	guest_ctx_st_ptr.dw = __vreg(vgt, ctx_ptr_reg);
-	if (guest_ctx_st_ptr.status_buf_write_ptr != vgt->rb[ring_id].csb_write_ptr) {
+	if (vgt->rb[ring_id].csb_has_update)
 		return false;
-	}
 
 	return true;
 }
 
-bool is_context_running(struct vgt_device *vgt, int ring_id,
+static bool is_context_running(struct vgt_device *vgt, int ring_id,
 	uint32_t context_id)
 {
 	uint32_t el_ring_base;
@@ -2094,7 +2103,7 @@ bool is_context_running(struct vgt_device *vgt, int ring_id,
 		return true;
 	return false;
 }
-bool is_lite_restore_submission(struct vgt_device *vgt, int ring_id,
+static bool is_lite_restore_submission(struct vgt_device *vgt, int ring_id,
 				uint32_t ctx0_id)
 {
 	vgt_state_ring_t *rb_state = &vgt->rb[ring_id];
@@ -2123,7 +2132,7 @@ bool is_lite_restore_submission(struct vgt_device *vgt, int ring_id,
 	}
 	return false;
 }
-bool could_submit_el(struct vgt_device *vgt,
+static bool could_submit_el(struct vgt_device *vgt,
 				int ring_id, struct vgt_exec_list *execlist)
 {
 	vgt_state_ring_t *rb_state = &vgt->rb[ring_id];
@@ -2201,7 +2210,6 @@ int vgt_submit_execlist(struct vgt_device *vgt, enum vgt_ring_id ring_id)
 	if (execlist == NULL)
 		return -EINVAL;
 	if (!could_submit_el(vgt, ring_id, execlist)) {
-		/* no pending EL to submit */
 		return -EBUSY;
 	}
 

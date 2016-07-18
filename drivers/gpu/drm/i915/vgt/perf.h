@@ -35,6 +35,8 @@ struct vgt_mmio_accounting_reg_stat {
 
 struct vgt_statistics {
 	u64	schedule_in_time;	/* TSC time when it is last scheduled in */
+	u64	schedule_out_time;
+	u64	last_vblank_time;
 	u64	allocated_cycles;
 	u64	used_cycles;
 	u64	irq_num;
@@ -78,6 +80,18 @@ struct vgt_statistics {
 	u64	gpt_find_miss_cnt;
 	u64	gpt_find_miss_cycles;
 	u64	skip_bb_cnt;
+
+	/* ppgtt last-level spt statistics */
+	u64 shadow_last_level_page_cnt;
+	u64 shadow_last_level_page_cycles;
+
+	/* oos page sync statistics */
+	/* oos page indicates the last-level page table page (page that consists of ptes) */
+	u64 oos_page_cnt;
+	u64 oos_page_cycles;
+	/* oos pte sync statistics */
+	u64 oos_pte_cnt;
+	u64 oos_pte_cycles;
 
 	struct vgt_mmio_accounting_reg_stat *mmio_accounting_reg_stats;
 	bool mmio_accounting;

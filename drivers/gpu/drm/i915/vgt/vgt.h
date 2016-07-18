@@ -111,6 +111,7 @@ extern bool timer_based_qos;
 extern int tbs_period_ms;
 extern bool opregion_present;
 extern int preemption_policy;
+extern bool vblank_broadcast;
 
 #define VGT_PREEMPTION_DISABLED   (1<<0)
 #define VGT_LITERESTORE_DISABLED  (1<<1)
@@ -126,6 +127,7 @@ extern int preemption_policy;
 #define VGT_DBG_IRQ		(1<<5)
 #define VGT_DBG_EDID		(1<<6)
 #define VGT_DBG_EXECLIST	(1<<7)
+#define VGT_DBG_RESET		(1<<8)
 #define VGT_DBG_ALL		(0xffff)
 
 #define SIZE_1KB		(1024UL)
@@ -457,6 +459,7 @@ struct pgt_device {
 	struct vgt_device *foreground_vm;		/* current visible domain on display. */
 	struct vgt_device *next_sched_vgt;
 	struct vgt_device *next_foreground_vm;
+	struct vgt_device *cur_reset_vm;	/* the VM who trigger reset */
 	struct list_head rendering_runq_head; /* reuse this for context scheduler */
 	struct list_head rendering_idleq_head; /* reuse this for context scheduler */
 	spinlock_t lock;
@@ -503,6 +506,8 @@ struct pgt_device {
 
 	int (*vgt_get_pixel_format)(u32 plane_ctl,
 		struct vgt_common_plane_format *common_plane, enum vgt_plane_type plane);
+
+	bool dummy_vm_switch;
 };
 
 /*
@@ -1133,7 +1138,7 @@ extern unsigned long rsvd_aperture_alloc(struct pgt_device *pdev,
 		unsigned long size);
 extern void rsvd_aperture_free(struct pgt_device *pdev, unsigned long start,
 		unsigned long size);
-
+extern void rsvd_aperture_runout_handler(struct pgt_device *pdev);
 #define reg_is_mmio(pdev, reg)	\
 	(reg >= 0 && reg < pdev->mmio_size)
 #define reg_is_gtt(pdev, reg)	\
@@ -1289,22 +1294,6 @@ static inline void vgt_init_sched_info(struct vgt_device *vgt)
 	}
 
 	if (timer_based_qos) {
-
-		if (tbs_period_ms == -1) {
-			tbs_period_ms = IS_BDWPLUS(vgt->pdev) ?
-				VGT_TBS_PERIOD_MIN : VGT_TBS_PERIOD_MAX;
-		}
-
-		if (tbs_period_ms > VGT_TBS_PERIOD_MAX
-			|| tbs_period_ms < VGT_TBS_PERIOD_MIN) {
-			vgt_err("Invalid tbs_period=%d parameters. "
-				"Best value between <%d..%d>\n",
-				VGT_TBS_PERIOD_MIN, VGT_TBS_PERIOD_MAX,
-				tbs_period_ms);
-			tbs_period_ms = IS_BDW(vgt->pdev) ?
-				VGT_TBS_PERIOD_MIN : VGT_TBS_PERIOD_MAX;
-		}
-
 		ctx_tbs_period(vgt) = VGT_TBS_DEFAULT_PERIOD(tbs_period_ms);
 		vgt_info("VM-%d setup timebased schedule period %d ms\n",
 			vgt->vm_id, tbs_period_ms);
@@ -1568,7 +1557,7 @@ static inline int vgt_pci_mmio_is_enabled(struct vgt_device *vgt)
 		_REGBIT_CFG_COMMAND_MEMORY;
 }
 
-#define VGT_DPY_EMUL_PERIOD	16000000	// 16 ms for now
+#define VGT_DPY_EMUL_PERIOD	16666667	// 16.6xxms, 60 per second.
 
 static inline void vgt_clear_all_vreg_bit(struct pgt_device *pdev, unsigned int value, unsigned int offset)
 {
@@ -1667,7 +1656,7 @@ void *vgt_install_irq(struct pci_dev *pdev, struct drm_device *dev);
 int vgt_irq_init(struct pgt_device *pgt);
 void vgt_irq_exit(struct pgt_device *pgt);
 void vgt_reset_virtual_interrupt_registers(struct vgt_device *vgt);
-void vgt_inject_flip_done(struct vgt_device *vgt, enum pipe pipe);
+void vgt_inject_flip_done(struct vgt_device *vgt, enum pipe pipe, enum vgt_plane_type plane);
 
 bool vgt_rrmr_mmio_write(struct vgt_device *vgt, unsigned int offset,
         void *p_data, unsigned int bytes);
@@ -1783,6 +1772,7 @@ extern int ring_ppgtt_mode(struct vgt_device *vgt, int ring_id, u32 off, u32 mod
 
 extern struct dentry *vgt_init_debugfs(struct pgt_device *pdev);
 extern int vgt_create_debugfs(struct vgt_device *vgt);
+extern void vgt_debugfs_symlink_module_param(void);
 
 /* command parser interface */
 #define MAX_CMD_BUDGET  0x7fffffff
@@ -1896,17 +1886,22 @@ bool ppgtt_update_shadow_ppgtt_for_ctx(struct vgt_device *vgt,struct execlist_co
 int vgt_el_create_shadow_ppgtt(struct vgt_device *vgt,
 				enum vgt_ring_id ring_id,
 				struct execlist_context *el_ctx);
-
-static inline void reset_el_structure(struct pgt_device *pdev,
+static inline void reset_phys_el_structure(struct pgt_device *pdev,
 				enum vgt_ring_id ring_id)
 {
 	el_read_ptr(pdev, ring_id) = DEFAULT_INV_SR_PTR;
-	vgt_clear_submitted_el_record(pdev, ring_id);
 	/* reset read ptr in MMIO as well */
 	VGT_MMIO_WRITE(pdev, el_ring_mmio(ring_id, _EL_OFFSET_STATUS_PTR),
 			((_CTXBUF_READ_PTR_MASK << 16) |
 			(DEFAULT_INV_SR_PTR << _CTXBUF_READ_PTR_SHIFT)));
 
+}
+
+static inline void reset_el_structure(struct pgt_device *pdev,
+				enum vgt_ring_id ring_id)
+{
+	vgt_clear_submitted_el_record(pdev, ring_id);
+	reset_phys_el_structure(pdev, ring_id);
 }
 
 #define ASSERT_VM(x, vgt)						\

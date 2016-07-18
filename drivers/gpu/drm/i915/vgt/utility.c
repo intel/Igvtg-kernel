@@ -136,10 +136,19 @@ void execlist_show_ring_debug(struct pgt_device *pdev, int ring_id)
 
 		vgt = pdev->device[i];
 
-		if (vgt == current_render_owner(pdev))
-			printk("VM%d(*):", vgt->vm_id);
-		else
-			printk("VM%d   :", vgt->vm_id);
+		if (vgt == current_render_owner(pdev)) {
+			printk("VM%d(*):\n", vgt->vm_id);
+			printk("stat(us): sche_in %lld, sche_out %lld, last_vblank %lld\n",
+				vgt->stat.schedule_in_time/(cpu_khz/1000),
+				vgt->stat.schedule_out_time/(cpu_khz/1000),
+				vgt->stat.last_vblank_time/(cpu_khz/1000));
+		} else {
+			printk("VM%d   :\n", vgt->vm_id);
+			printk("stat(us): sche_in %lld, sche_out %lld, last_vblank %lld\n",
+				vgt->stat.schedule_in_time/(cpu_khz/1000),
+				vgt->stat.schedule_out_time/(cpu_khz/1000),
+				vgt->stat.last_vblank_time/(cpu_khz/1000));
+		}
 	}
 
 	common_show_ring_debug(pdev, ring_id);
@@ -344,6 +353,9 @@ void common_show_ring_buffer(struct pgt_device *pdev, int ring_id, int bytes,
 	u64 ring_len, off;
 	u32 gpa;
 
+	if (pdev->cur_reset_vm)
+		vgt = pdev->cur_reset_vm;
+
 	printk("ring xxx:(%d), mi_mode idle:(%d)\n",
 		VGT_MMIO_READ(pdev, pdev->ring_xxx[ring_id]) & (1 << pdev->ring_xxx_bit[ring_id]),
 		VGT_MMIO_READ(pdev, pdev->ring_mi_mode[ring_id]) & MODE_IDLE);
@@ -419,9 +431,9 @@ void common_show_ring_buffer(struct pgt_device *pdev, int ring_id, int bytes,
 			return;
 		}
 
-		printk("Hang in (%s) batch buffer (%x)\n",
+		printk("Hang in (%s) batch buffer (%llx)\n",
 			ppgtt ? "PPGTT" : "GTT",
-			*(cur + 1));
+			(((u64)*(cur + 2)) << 32 | *(cur + 1)));
 
 		show_batchbuffer(pdev, ring_id,
 			batch_head,
@@ -429,7 +441,8 @@ void common_show_ring_buffer(struct pgt_device *pdev, int ring_id, int bytes,
 			ppgtt);
 	}
 
-	mmio_show_batchbuffer(pdev, ring_id, bytes);
+	if (pdev->cur_reset_vm == current_render_owner(pdev))
+		mmio_show_batchbuffer(pdev, ring_id, bytes);
 
 }
 
@@ -1268,11 +1281,9 @@ void dump_ctx_status_buf(struct vgt_device *vgt,
 		return;
 	}
 
-	if (hw_status) {
-		/* show all contents in hw buffer */
-		read_idx = 0;
-		write_idx = CTX_STATUS_BUF_NUM - 1;
-	}
+	/* show all contents in hw/virtual buffer */
+	read_idx = 0;
+	write_idx = CTX_STATUS_BUF_NUM - 1;
 
 	if (read_idx > write_idx)
 		write_idx += CTX_STATUS_BUF_NUM;
@@ -1351,6 +1362,13 @@ void dump_el_context_information(struct vgt_device *vgt,
 			(unsigned long long)guest_state);
 	dump_regstate_ctx_header(guest_state);
 
+	printk("-- Ring Buffer from guest context --\n");
+	common_show_ring_buffer(vgt->pdev, el_ctx->ring_id, 64 * 4,
+				guest_state->ring_tail.val,
+				guest_state->ring_header.val,
+				guest_state->rb_start.val,
+				guest_state->rb_ctrl.val,
+				0);
 	if (!has_shadow)
 		return;
 
@@ -1374,7 +1392,8 @@ void dump_all_el_contexts(struct pgt_device *pdev)
 		int j;
 
 		vgt = pdev->device[i];
-		if (!vgt)
+		if (!vgt || (pdev->cur_reset_vm &&
+					vgt != pdev->cur_reset_vm))
 			continue;
 		printk("-- VM(%d) --\n", vgt->vm_id);
 		hash_for_each_safe(vgt->gtt.el_ctx_hash_table, j, n, el_ctx, node) {
@@ -1417,7 +1436,8 @@ void dump_el_status(struct pgt_device *pdev)
 		dump_ctx_status_buf(vgt_dom0, ring_id, true);
 		for (i = 0; i < VGT_MAX_VMS; ++ i) {
 			struct vgt_device *vgt = pdev->device[i];
-			if (!vgt)
+			if (!vgt || (pdev->cur_reset_vm &&
+						vgt != pdev->cur_reset_vm))
 				continue;
 			dump_ctx_status_buf(vgt, ring_id, false);
 			dump_el_queue(vgt, ring_id);

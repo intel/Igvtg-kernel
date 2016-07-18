@@ -2518,6 +2518,7 @@ static int set_spte(struct kvm_vcpu *vcpu, u64 *sptep,
 
 #ifdef CONFIG_KVMGT
 		if (kvmgt_gfn_is_write_protected(vcpu->kvm, gfn)) {
+			spte &= ~(PT_WRITABLE_MASK | SPTE_MMU_WRITEABLE);
 			ret = 1;
 			goto set_pte;
 		}

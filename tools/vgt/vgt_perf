@@ -12,7 +12,7 @@
 #more details.
 #
 #You should have received a copy of the GNU General Public License along with
-#this program; if not, write to the Free Software Foundation, Inc., 
+#this program; if not, write to the Free Software Foundation, Inc.,
 #51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
 
 import os, sys, re
@@ -88,7 +88,7 @@ sys.stdout = Tee(sys.stdout, e["logf"])
 
 print "TAG: %ld (logfile: %s)" % (tag, e["log_file"])
 
-e["timeout"] = 360 
+e["timeout"] = 360
 if options.timeout:
 	e["timeout"] = options.timeout
 print "Timeout: %d" % e["timeout"]
@@ -97,7 +97,7 @@ def err_exit(e, msg):
 	print "Clean up environment on error (%s)" % msg
 	if "p_top" in e:
 		e["p_top"].terminate()
-	if "top_file" in e:	
+	if "top_file" in e:
 		e["top_file"].close()
 	if "p_xentop" in e:
 		e["p_xentop"].terminate()
@@ -249,6 +249,21 @@ state_nodes = {
 		"count"	: 1,
 		"cycles": 0,
 	},
+	"PPGTT shadow last-level page" : {
+		"node"	: "shadow_last_level_page_",
+		"count"	: 1,
+		"cycles": 1,
+	},
+	"Sync oos page" : {
+		"node"	: "oos_page_",
+		"count"	: 1,
+		"cycles": 1,
+	},
+	"Sync oos pte" : {
+		"node"	: "oos_pte_",
+		"count"	: 1,
+		"cycles": 1,
+	},
 	#"PM accesses" : {
 	#	"node" 	: "mmio_pm_",
 	#	"count"	: 1,
@@ -324,7 +339,7 @@ def avg(cnt, cycles):
 	return cycles/cnt
 
 format1 = "%-32s %-16s %-16s %-16s %-8s %-8s"
-format2 = "%-32s %-16ld %-16ld %-16ld %-8s %-8s" 
+format2 = "%-32s %-16ld %-16ld %-16ld %-8s %-8s"
 bias_vm=20000
 bias_dom0=1500
 
@@ -352,6 +367,20 @@ def print_gpu_cycles(e, vs, bias):
 			 avg(count, vs[cycles]),
 			 '/', '/')
 
+def print_mean_oos_pte_cnt_per_page(e, vs, bias):
+        type = "Mean oos pte cnt per page"
+        oos_pte_type = "Sync oos pte"
+        oos_page_type = "Sync oos page"
+        oos_pte_cnt = vs[state_nodes[oos_pte_type]["node"] + 'cnt']
+        oos_page_cnt = vs[state_nodes[oos_page_type]["node"] + 'cnt']
+        mean_count = oos_pte_cnt
+        if oos_page_cnt:
+                mean_count = oos_pte_cnt / oos_page_cnt
+        cycles = 0
+        print format2 % (type, mean_count, cycles,
+                         avg(count, cycles),
+                         '/', '/')
+
 def print_cmd_stats(e, vs, bias):
 	count = vs['total_cmds']
 	cycles = vs['vring_scan_cycles']
@@ -362,7 +391,7 @@ def print_cmd_stats(e, vs, bias):
 	print "Scanned CMDs: %ld" % vs['total_cmds']
 	print "cycles per CMD scan: %ld" % avg_cycles
 	print "CMDs per scan: %ld" % avg_cmds
-	print "Skipped batch buffers: %ld" % vs['skip_bb_cnt'] 
+	print "Skipped batch buffers: %ld" % vs['skip_bb_cnt']
 
 def show_result(e, s, r, time):
 	print "===================================="
@@ -424,6 +453,11 @@ def show_result(e, s, r, time):
 		print_param2(e, vs, "PPGTT guest page find miss", bias)
 		print_param2(e, vs, "PPGTT shadow page find hit", bias)
 		print_param2(e, vs, "PPGTT shadow page find miss", bias)
+		print_param2(e, vs, "PPGTT shadow last-level page", bias)
+		print_param2(e, vs, "Sync oos page", bias)
+		print_param2(e, vs, "Sync oos pte", bias)
+		print_mean_oos_pte_cnt_per_page(e, vs, bias)
+
 		#print_param2(e, vs, "PM accesses", bias)
 		#print_param2(e, vs, "IRQ accesses", bias)
 		#print_param2(vs, "Emulations", freq, bias)
@@ -493,7 +527,7 @@ def calculate_utilization(e):
 	if e["sample_top"]:
 		idle_data = analyze_output(e["log_top"], "Cpu\(s\):.*, (?P<idle>[0-9]+\.[0-9]+)\%id", "idle")
 		r['dom0_idle'] = get_avg_util_float(idle_data)
-		
+
 		count = 0
 		iter = 0
 		cmds = {}
@@ -502,22 +536,22 @@ def calculate_utilization(e):
 				count += 1
 				compare = False
 				continue
-		
+
 			if line.find("PID USER") >= 0:
 				compare = True
 				continue
-		
+
 			if not compare:
 				continue
-		
+
 			m = re.search(" *\w+ +\w+ +\w+ +[\w\-]+ +[\w\.]+ +[\w\.]+ +[\w\.]+ +\w+ +(?P<cpu>[0-9\.]+) +[0-9\.]+ +[0-9\:\.]+ +(?P<cmd>[^ ]+)", line)
 			if not m:
 				continue;
-		
+
 			if m.group("cmd") not in cmds:
 				cmds[m.group("cmd")] = []
 			cmds[m.group("cmd")].append(m.group("cpu"))
-		
+
 		r['procs'] = {}
 		for cmd in cmds.keys():
 			tot = 0

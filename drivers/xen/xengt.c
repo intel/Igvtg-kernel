@@ -1129,6 +1129,12 @@ static void *xen_gpa_to_va(struct vgt_device *vgt, unsigned long gpa)
 
 	if (!vgt->vm_id)
 		return (char*)xen_mfn_to_virt(gpa>>PAGE_SHIFT) + (gpa & (PAGE_SIZE-1));
+
+	if (gpa > info->vmem_sz) {
+		vgt_err("vGT try to access invalid gpa=0x%lx\n", gpa);
+		return NULL;
+	}
+
 	/*
 	 * At the beginning of _hvm_mmio_emulation(), we already initialize
 	 * info->vmem_vma and info->vmem_vma_low_1mb.

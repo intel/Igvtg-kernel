@@ -384,11 +384,17 @@ bool vgt_emulate_read(struct vgt_device *vgt, uint64_t pa, void *p_data,int byte
 
 		if (offset == 0x206c) {
 			printk("------------------------------------------\n");
-			printk("VM(%d) likely triggers a gfx reset\n", vgt->vm_id);
+			printk("VM(%d) likely triggers a gfx reset at %lld\n",
+					vgt->vm_id, vgt_get_cycles()/(cpu_khz/1000));
 			printk("Disable untracked MMIO warning for VM(%d)\n", vgt->vm_id);
 			printk("------------------------------------------\n");
 			vgt->warn_untrack = 0;
+			pdev->cur_reset_vm = vgt;
 			show_debug(pdev);
+			if (vgt_debug & VGT_DBG_RESET)
+				dump_all_el_contexts(pdev);
+			dump_el_status(pdev);
+			pdev->cur_reset_vm = NULL;
 		}
 
 		//WARN_ON(vgt->vm_id == 0); /* The call stack is meaningless for HVM */

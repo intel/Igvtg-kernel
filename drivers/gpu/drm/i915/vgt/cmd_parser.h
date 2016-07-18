@@ -439,6 +439,12 @@ typedef enum{
 	PPGTT_BUFFER
 }gtt_addr_t;
 
+typedef enum {
+	NO_CMD_SHADOW = 0,
+	NORMAL_CMD_SHADOW = 1,
+	INDIRECT_CTX_SHADOW = 2,
+} cmd_shadow_t;
+
 struct parser_exec_state {
 	struct vgt_device *vgt;
 	int ring_id;
@@ -487,7 +493,7 @@ struct parser_exec_state {
 	void *ip_buf;
 
 	struct execlist_context *el_ctx;
-	bool shadow;
+	cmd_shadow_t shadow;
 };
 
 #define CMD_TAIL_NUM	1024

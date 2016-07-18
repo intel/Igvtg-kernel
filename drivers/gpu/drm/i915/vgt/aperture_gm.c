@@ -150,6 +150,11 @@ void rsvd_aperture_free(struct pgt_device *pdev, unsigned long start, unsigned l
 	}
 }
 
+void rsvd_aperture_runout_handler(struct pgt_device *pdev)
+{
+	pdev->dummy_vm_switch = true;
+}
+
 ssize_t get_avl_vm_aperture_gm_and_fence(struct pgt_device *pdev, char *buf,
 		ssize_t buf_sz)
 {

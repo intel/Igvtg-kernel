@@ -56,6 +56,7 @@ struct vgt_sprite_plane_format {
 	u32	y_offset;	/* in lines */
 	u32	width;		/* in pixels */
 	u32	height;		/* in lines */
+	u32     stride;         /* in bytes */
 	u8	drm_fmt_desc[MAX_DRM_STR_SZ];
 };
 

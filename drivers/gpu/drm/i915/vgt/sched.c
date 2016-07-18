@@ -93,8 +93,10 @@ static struct vgt_device *tbs_next_vgt(
 			next = head->next;
 		next_vgt = list_entry(next, struct vgt_device, list);
 
-		if (!vgt_vrings_empty(next_vgt))
+		if (!vgt_vrings_empty(next_vgt) || pdev->dummy_vm_switch) {
+			pdev->dummy_vm_switch = false;
 			break;
+		}
 
 	} while (next_vgt != vgt);
 

@@ -243,6 +243,9 @@ vgt_reg_t vgt_gen9_render_regs[] = {
 	0x24d8,
 	0x24dc,
 
+	_REG_VCS2_EXCC,
+	_REG_VECS_EXCC,
+
 	/* Execlist Status Registers */
 	_REG_RCS_EXECLIST_STATUS,
 	_REG_VCS_EXECLIST_STATUS,
@@ -493,48 +496,72 @@ static struct reg_mask_t gen8_rcs_reset_mmio[] = {
 	{0x7010, 1},
 
 	{0x83a4, 1},
+	{0x229c, 1},
 };
 
-static bool gen8_reset_engine(int ring_id,
-		struct vgt_device *prev, struct vgt_device *next)
+static struct reg_mask_t gen9_rcs_reset_mmio[] = {
+	{0x229c, 1},
+};
+
+static bool gen8plus_ring_switch(struct pgt_device *pdev,
+		enum vgt_ring_id ring_id,
+		struct vgt_device *prev,
+		struct vgt_device *next)
 {
-	struct pgt_device *pdev = next->pdev;
 	int count = 0;
+	struct reg_mask_t *reset_mmio = NULL;
+	int reg_num = 0;
 
 	if (ring_id != RING_BUFFER_RCS)
 		return true;
 
-	for (count = 0; count < ARRAY_SIZE(gen8_rcs_reset_mmio); count++) {
-		struct reg_mask_t *r = &gen8_rcs_reset_mmio[count];
+	if (IS_BDW(pdev)) {
+		reg_num = ARRAY_SIZE(gen8_rcs_reset_mmio);
+		reset_mmio = gen8_rcs_reset_mmio;
+	}
+	else if (IS_SKL(pdev)) {
+		reg_num = ARRAY_SIZE(gen9_rcs_reset_mmio);
+		reset_mmio = gen9_rcs_reset_mmio;
+	}
+
+	for (count = 0; count < reg_num; count++) {
+		struct reg_mask_t *r = reset_mmio+count;
 		__vreg(prev, r->reg) = VGT_MMIO_READ(pdev, r->reg);
 	}
-#if 0
-	VGT_MMIO_WRITE(pdev, 0x20d0, (1 << 16) | (1 << 0));
 
-	for (count = 1000; count > 0; count --)
-		if (VGT_MMIO_READ(pdev, 0x20d0) & (1 << 1))
-			break;
+	/* Current policy:
+	 * BDW render_engine_reset = 0
+	 * SKL render_engine_reset = 1
+	 */
+	if (render_engine_reset) {
 
-	if (!count) {
-		vgt_err("wait 0x20d0 timeout.\n");
-		return false;
+		VGT_MMIO_WRITE(pdev, 0x20d0, (1 << 16) | (1 << 0));
+
+		for (count = 1000; count > 0; count --)
+			if (VGT_MMIO_READ(pdev, 0x20d0) & (1 << 1))
+				break;
+
+		if (!count) {
+			vgt_err("wait 0x20d0 timeout.\n");
+			return false;
+		}
+
+		VGT_MMIO_WRITE(pdev, GEN6_GDRST, GEN6_GRDOM_RENDER);
+
+		for (count = 1000; count > 0; count --)
+			if (!(VGT_MMIO_READ(pdev, GEN6_GDRST) & GEN6_GRDOM_RENDER))
+				break;
+
+		if (!count) {
+			vgt_err("wait gdrst timeout.\n");
+			return false;
+		}
+
+		VGT_MMIO_WRITE(pdev, IMR, __sreg(vgt_dom0, IMR));
 	}
 
-	VGT_MMIO_WRITE(pdev, GEN6_GDRST, GEN6_GRDOM_RENDER);
-
-	for (count = 1000; count > 0; count --)
-		if (!(VGT_MMIO_READ(pdev, GEN6_GDRST) & GEN6_GRDOM_RENDER))
-			break;
-
-	if (!count) {
-		vgt_err("wait gdrst timeout.\n");
-		return false;
-	}
-
-	VGT_MMIO_WRITE(pdev, IMR, __sreg(vgt_dom0, IMR));
-#endif
-	for (count = 0; count < ARRAY_SIZE(gen8_rcs_reset_mmio); count++) {
-		struct reg_mask_t *r = &gen8_rcs_reset_mmio[count];
+	for (count = 0; count < reg_num; count++) {
+		struct reg_mask_t *r = reset_mmio+count;
 		vgt_reg_t v = __vreg(next, r->reg);
 		if (r->mask)
 			v |= 0xffff0000;
@@ -543,20 +570,8 @@ static bool gen8_reset_engine(int ring_id,
 		VGT_POST_READ(pdev, r->reg);
 	}
 
-//	reset_el_structure(pdev, ring_id);
-
-	return true;
-}
-
-static bool gen8_ring_switch(struct pgt_device *pdev,
-		enum vgt_ring_id ring_id,
-		struct vgt_device *prev,
-		struct vgt_device *next)
-{
-	if (render_engine_reset && !gen8_reset_engine(ring_id, prev, next)) {
-		vgt_err("Fail to reset engine\n");
-		return false;
-	}
+	if (render_engine_reset)
+		reset_phys_el_structure(pdev, ring_id);
 
 	return true;
 }
@@ -627,6 +642,7 @@ bool vgt_do_render_context_switch(struct pgt_device *pdev)
 	pdev->stat.context_switch_num ++;
 	t1 = vgt_get_cycles();
 	pdev->stat.ring_idle_wait += t1 - t0;
+	prev->stat.schedule_out_time = t1;
 
 	vgt_sched_update_prev(prev, t0);
 
@@ -644,8 +660,8 @@ bool vgt_do_render_context_switch(struct pgt_device *pdev)
 
 		if (IS_PREBDW(pdev))
 			gen7_ring_switch(pdev, i, prev, next);
-		else if (IS_BDW(pdev))
-			gen8_ring_switch(pdev, i, prev, next);
+		else
+			gen8plus_ring_switch(pdev, i, prev, next);
 	}
 
 	/* STEP-3: manually restore render context */

@@ -1028,8 +1028,10 @@ int __kvm_set_memory_region(struct kvm *kvm,
 	 */
 	if ((change == KVM_MR_CREATE) || (change == KVM_MR_MOVE)) {
 #ifdef CONFIG_KVMGT
-		kvmgt_pin_slot(kvm, &new);
-		update_memslots(slots, &new);
+		if (as_id == 0) {
+			kvmgt_pin_slot(kvm, &new);
+			update_memslots(slots, &new);
+		}
 #endif
 		r = kvm_iommu_map_pages(kvm, &new);
 		return r;

@@ -1162,7 +1162,6 @@ static void vgt_handle_ctx_switch_virt(struct vgt_irq_host_state *hstate,
 	struct ctx_st_ptr_format ctx_ptr_val;
 	int v_write_ptr;
 	int s_write_ptr;
-	bool csb_has_new_updates = false;
 
 	ring_id = event_to_ring_id(event);
 	ctx_ptr_reg = el_ring_mmio(ring_id, _EL_OFFSET_STATUS_PTR);
@@ -1170,10 +1169,9 @@ static void vgt_handle_ctx_switch_virt(struct vgt_irq_host_state *hstate,
 	v_write_ptr = ctx_ptr_val.status_buf_write_ptr;
 	s_write_ptr = vgt->rb[ring_id].csb_write_ptr;
 
-	if (v_write_ptr != s_write_ptr)
-		csb_has_new_updates = true;
+	if (hvm_render_owner || vgt->rb[ring_id].csb_has_update) {
 
-	if (hvm_render_owner || csb_has_new_updates) {
+		vgt->rb[ring_id].csb_has_update = false;
 
 		if (current_render_owner(vgt->pdev) != vgt) {
 			/* In any case, we should not go here! */
@@ -1183,8 +1181,6 @@ static void vgt_handle_ctx_switch_virt(struct vgt_irq_host_state *hstate,
 			ctx_ptr_val.dw, s_write_ptr);
 		}
 
-		ctx_ptr_val.status_buf_write_ptr = s_write_ptr;
-		__vreg(vgt, ctx_ptr_reg) = ctx_ptr_val.dw;
 		vgt_handle_default_event_virt(hstate, event, vgt);
 	}
 }
@@ -1740,12 +1736,14 @@ static void vgt_gen8_init_irq(
 		SET_BIT_INFO(hstate, 25, AUX_CHANNEL_B, IRQ_INFO_DE_PORT);
 		SET_BIT_INFO(hstate, 26, AUX_CHANNEL_C, IRQ_INFO_DE_PORT);
 		SET_BIT_INFO(hstate, 27, AUX_CHANNEL_D, IRQ_INFO_DE_PORT);
-		/*
-		 * Only support page flip interrupt on primary plane.
-		 */
+
 		SET_BIT_INFO(hstate, 3, PRIMARY_A_FLIP_DONE, IRQ_INFO_DE_PIPE_A);
 		SET_BIT_INFO(hstate, 3, PRIMARY_B_FLIP_DONE, IRQ_INFO_DE_PIPE_B);
 		SET_BIT_INFO(hstate, 3, PRIMARY_C_FLIP_DONE, IRQ_INFO_DE_PIPE_C);
+
+		SET_BIT_INFO(hstate, 4, SPRITE_A_FLIP_DONE, IRQ_INFO_DE_PIPE_A);
+		SET_BIT_INFO(hstate, 4, SPRITE_B_FLIP_DONE, IRQ_INFO_DE_PIPE_B);
+		SET_BIT_INFO(hstate, 4, SPRITE_C_FLIP_DONE, IRQ_INFO_DE_PIPE_C);
 	}
 
 	irq_based_ctx_switch = false;
@@ -1920,6 +1918,8 @@ void vgt_emulate_dpy_events(struct pgt_device *pdev)
 		vgt_emulate_vblank(vgt, PIPE_A);
 		vgt_emulate_vblank(vgt, PIPE_B);
 		vgt_emulate_vblank(vgt, PIPE_C);
+
+		vgt->stat.last_vblank_time = vgt_get_cycles();
 	}
 }
 
@@ -2094,6 +2094,12 @@ static void vgt_init_events(
 		SET_POLICY_RDR(hstate, VCS_MI_FLUSH_DW);
 		SET_POLICY_RDR(hstate, VECS_MI_FLUSH_DW);
 	}
+
+	if (vblank_broadcast) {
+		SET_POLICY_ALL(hstate, PIPE_A_VBLANK);
+		SET_POLICY_ALL(hstate, PIPE_B_VBLANK);
+		SET_POLICY_ALL(hstate, PIPE_C_VBLANK);
+	}
 }
 
 static enum hrtimer_restart vgt_dpy_timer_fn(struct hrtimer *data)
@@ -2106,7 +2112,8 @@ static enum hrtimer_restart vgt_dpy_timer_fn(struct hrtimer *data)
 	hstate = container_of(dpy_timer, struct vgt_irq_host_state, dpy_timer);
 	pdev = hstate->pdev;
 
-	vgt_raise_request(pdev, VGT_REQUEST_EMUL_DPY_EVENTS);
+	if (!vblank_broadcast)
+		vgt_raise_request(pdev, VGT_REQUEST_EMUL_DPY_EVENTS);
 
 	hrtimer_add_expires_ns(&dpy_timer->timer, dpy_timer->period);
 	return HRTIMER_RESTART;
@@ -2255,16 +2262,25 @@ void vgt_fini_irq(struct pci_dev *pdev)
 	hstate->installed = false;
 }
 
-void vgt_inject_flip_done(struct vgt_device *vgt, enum pipe pipe)
+void vgt_inject_flip_done(struct vgt_device *vgt, enum pipe pipe, enum vgt_plane_type plane)
 {
 	enum vgt_event_type event = EVENT_MAX;
 	if (current_display_owner(vgt->pdev) != vgt) {
 		if (pipe == PIPE_A) {
-			event = PRIMARY_A_FLIP_DONE;
+			if (plane == PRIMARY_PLANE)
+				event = PRIMARY_A_FLIP_DONE;
+			else if (plane == SPRITE_PLANE)
+				event = SPRITE_A_FLIP_DONE;
 		} else if (pipe == PIPE_B) {
-			event = PRIMARY_B_FLIP_DONE;
+			if (plane == PRIMARY_PLANE)
+				event = PRIMARY_B_FLIP_DONE;
+			else if (plane == SPRITE_PLANE)
+				event = SPRITE_B_FLIP_DONE;
 		} else if (pipe == PIPE_C) {
-			event = PRIMARY_C_FLIP_DONE;
+			if (plane == PRIMARY_PLANE)
+				event = PRIMARY_C_FLIP_DONE;
+			else if (plane == SPRITE_PLANE)
+				event = SPRITE_C_FLIP_DONE;
 		}
 
 		if (event != EVENT_MAX) {

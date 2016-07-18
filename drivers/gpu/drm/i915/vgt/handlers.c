@@ -285,7 +285,12 @@ static bool handle_device_reset(struct vgt_device *vgt, unsigned int offset,
 	vgt_info("VM %d is trying to reset device: %s.\n", vgt->vm_id,
 		ring_bitmap == 0xff ? "full reset" : "per-engine reset");
 
+	vgt->pdev->cur_reset_vm = vgt;
 	show_debug(vgt->pdev);
+	if (vgt_debug & VGT_DBG_RESET)
+		dump_all_el_contexts(vgt->pdev);
+	dump_el_status(vgt->pdev);
+	vgt->pdev->cur_reset_vm = NULL;
 
 	/* after this point, driver should re-initialize the device */
 	vgt->warn_untrack = 1;
@@ -314,13 +319,52 @@ static bool handle_device_reset(struct vgt_device *vgt, unsigned int offset,
 		if (device_is_reseting(vgt->pdev))
 			return default_mmio_write(vgt, offset, p_data, bytes);
 	} else {
-		if (current_render_owner(vgt->pdev) == vgt)
+		if (current_render_owner(vgt->pdev) == vgt) {
 			vgt_request_force_removal(vgt);
+
+			vgt_info("VM %d: unlock before wait for force removal event\n",
+					vgt->vm_id);
+
+			spin_unlock(&vgt->pdev->lock);
+			if (vgt->force_removal)
+				wait_event_killable(vgt->pdev->destroy_wq, !vgt->force_removal);
+
+			vgt_info("VM %d: force removal event... wake up\n",
+					vgt->vm_id);
+
+			spin_lock(&vgt->pdev->lock);
+
+			vgt_info("VM %d: lock again afterforce removal event\n",
+					vgt->vm_id);
+
+
+		}
+
+		/*clean up during reset */
+		if (test_and_clear_bit(RESET_INPROGRESS, &vgt->reset_flags)) {
+
+			vgt_info("VM %d: vgt_clean_up begin.\n", vgt->vm_id);
+
+			/*unlock first, may sleep @ vfree in vgt_clean_vgtt*/
+			spin_unlock(&vgt->pdev->lock);
+			vgt_clean_vgtt(vgt);
+			vgt_clear_gtt(vgt);
+			state_sreg_init(vgt);
+			state_vreg_init(vgt);
+			vgt_init_vgtt(vgt);
+
+			vgt_info("VM %d: vgt_clean_up end.\n", vgt->vm_id);
+
+			spin_lock(&vgt->pdev->lock);
+
+			vgt_info("VM %d: lock.again\n", vgt->vm_id);
+		}
 	}
 
 	return true;
 }
 
+/*be noted that big lock is called inside handle_device_reset*/
 static bool gen6_gdrst_mmio_write(struct vgt_device *vgt, unsigned int offset,
 		void *p_data, unsigned int bytes)
 {
@@ -1402,7 +1446,7 @@ static bool pri_surf_mmio_write(struct vgt_device *vgt, unsigned int offset,
 	msg.pipe_id = VGT_DSPSURFPIPE(offset);
 	vgt_fb_notifier_call_chain(FB_DISPLAY_FLIP, &msg);
 
-	vgt_inject_flip_done(vgt, VGT_DSPSURFPIPE(offset));
+	vgt_inject_flip_done(vgt, VGT_DSPSURFPIPE(offset), PRIMARY_PLANE);
 
 	return rc;
 }
@@ -1442,6 +1486,8 @@ static bool spr_surf_mmio_write(struct vgt_device *vgt, unsigned int offset,
 	msg.plane_id = SPRITE_PLANE;
 	msg.pipe_id = VGT_SPRSURFPIPE(offset);
 	vgt_fb_notifier_call_chain(FB_DISPLAY_FLIP, &msg);
+
+	vgt_inject_flip_done(vgt, VGT_DSPSURFPIPE(offset), SPRITE_PLANE);
 
 	return rc;
 }
@@ -3664,6 +3710,11 @@ reg_attr_t vgt_reg_info_general[] = {
 {0x4270, 4, F_VIRT, 0, D_BDW_PLUS, NULL, vgt_reg_tlb_control_handler},
 
 {_RING_FAULT_REG(RING_BUFFER_RCS), 4, F_RDR, 0, D_BDW_PLUS, NULL, NULL},
+{0x6651c, 4, F_DPY, 0, D_BDW_PLUS, NULL, NULL},
+{0x6671c, 4, F_DPY, 0, D_BDW_PLUS, NULL, NULL},
+{0x44484, 4, F_DOM0, 0, D_BDW_PLUS, NULL, NULL},
+{0x4448c, 4, F_DOM0, 0, D_BDW_PLUS, NULL, NULL},
+{0x4a404, 4, F_DPY, 0, D_BDW_PLUS, NULL, NULL},
 };
 
 reg_attr_t vgt_reg_info_bdw[] = {
@@ -3901,9 +3952,9 @@ reg_attr_t vgt_reg_info_bdw[] = {
 
 {0x7300, 4, F_RDR_MODE, 0, D_BDW_PLUS, NULL, NULL},
 
-{0x420b0, 4, F_DPY, 0, D_BDW, NULL, NULL},
-{0x420b4, 4, F_DPY, 0, D_BDW, NULL, NULL},
-{0x420b8, 4, F_DPY, 0, D_BDW, NULL, NULL},
+{0x420b0, 4, F_DPY, 0, D_BDW_PLUS, NULL, NULL},
+{0x420b4, 4, F_DPY, 0, D_BDW_PLUS, NULL, NULL},
+{0x420b8, 4, F_DPY, 0, D_BDW_PLUS, NULL, NULL},
 
 {0x45260, 4, F_DPY, 0, D_BDW, NULL, NULL},
 {0x6f800, 4, F_DPY, 0, D_BDW, NULL, NULL},
@@ -3918,7 +3969,7 @@ reg_attr_t vgt_reg_info_bdw[] = {
 {0x913c, 4, F_VIRT, 0, D_BDW_PLUS, NULL, NULL},
 
 /* WA */
-{0xfdc, 4, F_DOM0, 0, D_BDW, NULL, NULL},
+{0xfdc, 4, F_DOM0, 0, D_BDW_PLUS, NULL, NULL},
 {0xe4f0, 4, F_RDR_MODE, 0, D_BDW_PLUS, NULL, NULL},
 {0xe4f4, 4, F_RDR_MODE, 0, D_BDW_PLUS, NULL, NULL},
 {0x9430, 4, F_RDR, 0, D_BDW_PLUS, NULL, NULL},
@@ -4109,6 +4160,8 @@ reg_attr_t vgt_reg_info_skl[] = {
 {_REG_701C4(PIPE_C, 4), 4, F_DPY, 0, D_SKL, NULL, dpy_plane_mmio_write},
 
 {0x70380, 4, F_DPY, 0, D_SKL, NULL, NULL},
+{0x71380, 4, F_DPY, 0, D_SKL, NULL, NULL},
+{0x72380, 4, F_DPY, 0, D_SKL, NULL, NULL},
 {0x7039c, 4, F_DPY, 0, D_SKL, NULL, NULL},
 
 {0x80000, 0x3000, F_DPY, 0, D_SKL, NULL, NULL},
@@ -4145,6 +4198,55 @@ reg_attr_t vgt_reg_info_skl[] = {
 {0xc403c, 4, F_VIRT, 0, D_SKL, NULL, NULL},
 {0xb004, 4, F_DOM0, 0, D_SKL, NULL, NULL},
 {DMA_CTRL, 4, F_DOM0, 0, D_SKL_PLUS, NULL, dma_ctrl_write},
+
+{0x65900, 4, F_DOM0, 0, D_SKL, NULL, NULL},
+{0x1082c0, 4, F_DOM0, 0, D_SKL, NULL, NULL},
+{0x4068, 4, F_DOM0, 0, D_SKL, NULL, NULL},
+{0x67054, 4, F_DOM0, 0, D_SKL, NULL, NULL},
+{0x6e560, 4, F_DOM0, 0, D_SKL, NULL, NULL},
+{0x6e544, 4, F_DOM0, 0, D_SKL, NULL, NULL},
+{0x2b20, 4, F_DOM0, 0, D_SKL, NULL, NULL},
+{0x65f00, 4, F_DOM0, 0, D_SKL, NULL, NULL},
+{0x65f08, 4, F_DOM0, 0, D_SKL, NULL, NULL},
+{0x320f0, 4, F_DOM0, 0, D_SKL, NULL, NULL},
+
+{_REG_VCS2_EXCC, 4, F_RDR, 0, D_SKL, NULL, NULL},
+{_REG_VECS_EXCC, 4, F_RDR, 0, D_SKL, NULL, NULL},
+{0x70034, 4, F_DPY, 0, D_SKL, NULL, NULL},
+{0x71034, 4, F_DPY, 0, D_SKL, NULL, NULL},
+{0x72034, 4, F_DPY, 0, D_SKL, NULL, NULL},
+
+{_PLANE_KEYVAL_1(PIPE_A), 4, F_DPY, 0, D_SKL, NULL, NULL},
+{_PLANE_KEYVAL_1(PIPE_B), 4, F_DPY, 0, D_SKL, NULL, NULL},
+{_PLANE_KEYVAL_1(PIPE_C), 4, F_DPY, 0, D_SKL, NULL, NULL},
+{_PLANE_KEYMSK_1(PIPE_A), 4, F_DPY, 0, D_SKL, NULL, NULL},
+{_PLANE_KEYMSK_1(PIPE_B), 4, F_DPY, 0, D_SKL, NULL, NULL},
+{_PLANE_KEYMSK_1(PIPE_C), 4, F_DPY, 0, D_SKL, NULL, NULL},
+
+{SPRKEYMAX(PIPE_A), 4, F_DPY, 0, D_SKL, NULL, NULL},
+{SPRKEYMAX(PIPE_B), 4, F_DPY, 0, D_SKL, NULL, NULL},
+{SPRKEYMAX(PIPE_C), 4, F_DPY, 0, D_SKL, NULL, NULL},
+{SPRPOS(PIPE_A), 4, F_DPY, 0, D_SKL, NULL, NULL},
+{SPRPOS(PIPE_B), 4, F_DPY, 0, D_SKL, NULL, NULL},
+{SPRPOS(PIPE_C), 4, F_DPY, 0, D_SKL, NULL, NULL},
+{SPRKEYVAL(PIPE_A), 4, F_DPY, 0, D_SKL, NULL, NULL},
+{SPRKEYVAL(PIPE_B), 4, F_DPY, 0, D_SKL, NULL, NULL},
+{SPRKEYVAL(PIPE_C), 4, F_DPY, 0, D_SKL, NULL, NULL},
+{SPRKEYMSK(PIPE_A), 4, F_DPY, 0, D_SKL, NULL, NULL},
+{SPRKEYMSK(PIPE_B), 4, F_DPY, 0, D_SKL, NULL, NULL},
+{SPRKEYMSK(PIPE_C), 4, F_DPY, 0, D_SKL, NULL, NULL},
+{SPROFFSET(PIPE_A), 4, F_DPY, 0, D_SKL, NULL, NULL},
+{SPROFFSET(PIPE_B), 4, F_DPY, 0, D_SKL, NULL, NULL},
+{SPROFFSET(PIPE_C), 4, F_DPY, 0, D_SKL, NULL, NULL},
+
+{VGT_SPRSTRIDE(PIPE_A), 4, F_DPY, 0, D_SKL, NULL, NULL},
+{VGT_SPRSTRIDE(PIPE_B), 4, F_DPY, 0, D_SKL, NULL, NULL},
+{VGT_SPRSTRIDE(PIPE_C), 4, F_DPY, 0, D_SKL, NULL, NULL},
+
+{SPRSIZE(PIPE_A), 4, F_DPY, 0, D_SKL, NULL, NULL},
+{SPRSIZE(PIPE_B), 4, F_DPY, 0, D_SKL, NULL, NULL},
+{SPRSIZE(PIPE_C), 4, F_DPY, 0, D_SKL, NULL, NULL},
+{0x44500, 4, F_DPY, 0, D_SKL, NULL, NULL},
 };
 
 static void vgt_passthrough_execlist(struct pgt_device *pdev)

@@ -185,7 +185,7 @@ static int vgt_decode_information(struct drm_device *dev,
 		return -EINVAL;
 	}
 
-	args->size = (((args->width * args->height * args->bpp) / 8) +
+	args->size = (((args->stride * args->height * args->bpp) / 8) +
 		      (PAGE_SIZE - 1)) >> PAGE_SHIFT;
 
 	if (args->start & (PAGE_SIZE - 1)) {

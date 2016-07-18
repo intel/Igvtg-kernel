@@ -260,6 +260,11 @@ int create_vgt_instance(struct pgt_device *pdev, struct vgt_device **ptr_vgt, vg
 
 	vgt->bypass_addr_check = bypass_dom0_addr_check && (vgt->vm_id == 0);
 
+	for (i = 0; i < MAX_ENGINES; ++i)
+		vgt->rb[i].csb_write_ptr = DEFAULT_INV_SR_PTR;
+
+	vgt_reset_virtual_interrupt_registers(vgt);
+
 	vgt_lock_dev(pdev, cpu);
 
 	pdev->device[vgt->vgt_id] = vgt;
@@ -301,10 +306,6 @@ int create_vgt_instance(struct pgt_device *pdev, struct vgt_device **ptr_vgt, vg
 	bitmap_zero(vgt->started_rings, MAX_ENGINES);
 	bitmap_zero(vgt->tlb_handle_pending, MAX_ENGINES);
 
-	for (i = 0; i < MAX_ENGINES; ++ i) {
-		vgt->rb[i].csb_write_ptr = DEFAULT_INV_SR_PTR;
-	}
-
 	/* create debugfs per vgt */
 	if ((rc = vgt_create_debugfs(vgt)) < 0) {
 		vgt_err("failed to create debugfs for vgt-%d\n",
@@ -319,8 +320,6 @@ int create_vgt_instance(struct pgt_device *pdev, struct vgt_device **ptr_vgt, vg
 	}
 
 	vgt_init_i2c_edid(vgt);
-
-	vgt_reset_virtual_interrupt_registers(vgt);
 
 	*ptr_vgt = vgt;
 

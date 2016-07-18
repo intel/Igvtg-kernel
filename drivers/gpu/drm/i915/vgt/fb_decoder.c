@@ -38,6 +38,7 @@ static struct pixel_format hsw_pixel_formats[FORMAT_NUM] = {
 	[0b0110]  = {DRM_FORMAT_XRGB8888, 32, "32-bit BGRX (8:8:8:8 MSB-X:R:G:B)"},
 	[0b1000]  = {DRM_FORMAT_XBGR2101010, 32, "32-bit RGBX (2:10:10:10 MSB-X:B:G:R)"},
 	[0b1010] = {DRM_FORMAT_XRGB2101010, 32, "32-bit BGRX (2:10:10:10 MSB-X:R:G:B)"},
+	[0b1100] = {DRM_FORMAT_XRGB161616_VGT, 64, "64-bit RGBX Floating Point(16:16:16:16 MSB-X:B:G:R)"},
 	[0b1110] = {DRM_FORMAT_XBGR8888, 32, "32-bit RGBX (8:8:8:8 MSB-X:B:G:R)"},
 };
 
@@ -57,6 +58,9 @@ static struct pixel_format skl_pixel_formats[] = {
 	{DRM_FORMAT_XBGR2101010, 32, "32-bit RGBX (2:10:10:10 MSB-X:B:G:R)"},
 	{DRM_FORMAT_XRGB2101010, 32, "32-bit BGRX (2:10:10:10 MSB-X:R:G:B)"},
 
+	{DRM_FORMAT_XRGB161616_VGT, 64, "64-bit XRGB (16:16:16:16 MSB-X:R:G:B)"},
+	{DRM_FORMAT_XBGR161616_VGT, 64, "64-bit XBGR (16:16:16:16 MSB-X:B:G:R)"},
+
 	/* non-supported format has bpp default to 0 */
 	{0, 0, NULL},
 };
@@ -72,12 +76,13 @@ static struct pixel_format hsw_pixel_formats_sprite[FORMAT_NUM_SRRITE] = {
 	[0b000]  = {DRM_FORMAT_YUV422, 16, "YUV 16-bit 4:2:2 packed"},
 	[0b001]  = {DRM_FORMAT_XRGB2101010, 32, "RGB 32-bit 2:10:10:10"},
 	[0b010]  = {DRM_FORMAT_XRGB8888, 32, "RGB 32-bit 8:8:8:8"},
+	[0b011]  = {DRM_FORMAT_XRGB161616_VGT, 64, "RGB 64-bit 16:16:16:16 Floating Point"},
 	[0b100] = {DRM_FORMAT_AYUV, 32, "YUV 32-bit 4:4:4 packed (8:8:8:8 MSB-X:Y:U:V)"},
 };
 
 static int skl_format_to_drm(int format, bool rgb_order, bool alpha, int yuv_order)
 {
-	int skl_pixel_formats_index = 12;
+	int skl_pixel_formats_index = 14;
 
 	switch (format) {
 	case PLANE_CTL_FORMAT_INDEXED:
@@ -105,6 +110,14 @@ static int skl_format_to_drm(int format, bool rgb_order, bool alpha, int yuv_ord
 		else
 			skl_pixel_formats_index = 11;
 		break;
+
+	case PLANE_CTL_FORMAT_XRGB_16161616F:
+		if (rgb_order)
+			skl_pixel_formats_index = 12;
+		else
+			skl_pixel_formats_index = 13;
+		break;
+
 	case PLANE_CTL_FORMAT_YUV422:
 		skl_pixel_formats_index = yuv_order >> 16;
 		if (skl_pixel_formats_index > 3)
@@ -177,6 +190,8 @@ int vgt_get_pixel_format_preskl(u32 plane_ctl,
 				drm_format = DRM_FORMAT_XBGR2101010;
 			else if (drm_format == DRM_FORMAT_XRGB8888)
 				drm_format = DRM_FORMAT_XBGR8888;
+			else if (drm_format == DRM_FORMAT_XRGB161616_VGT)
+				drm_format = DRM_FORMAT_XBGR161616_VGT;
 		}
 
 		if (drm_format == DRM_FORMAT_YUV422) {
@@ -352,7 +367,6 @@ int vgt_decode_sprite_plane_format(struct vgt_device *vgt,
 {
 	struct vgt_common_plane_format com_plane_fmt;
 	u32 val;
-	u32 width;
 
 	val = __vreg(vgt, VGT_SPRCTL(pipe));
 	plane->enabled = !!(val & SPRITE_ENABLE);
@@ -380,18 +394,15 @@ int vgt_decode_sprite_plane_format(struct vgt_device *vgt,
 	memcpy(plane->drm_fmt_desc, com_plane_fmt.gen_pixel_format.desc, MAX_DRM_STR_SZ);
 
 	plane->base = __vreg(vgt, VGT_SPRSURF(pipe)) & GTT_PAGE_MASK;
-	plane->width = __vreg(vgt, VGT_SPRSTRIDE(pipe)) & com_plane_fmt.stride_mask;
-	plane->width /= plane->bpp / 8;	/* raw width in bytes */
+	plane->stride = vgt_get_stride(vgt, pipe, plane->tiled,
+					com_plane_fmt.stride_mask, plane->bpp);
 
 	val = __vreg(vgt, VGT_SPRSIZE(pipe));
 	plane->height = (val & _SPRITE_SIZE_HEIGHT_MASK) >>
 		_SPRITE_SIZE_HEIGHT_SHIFT;
-	width = (val & _SPRITE_SIZE_WIDTH_MASK) >> _SPRITE_SIZE_WIDTH_SHIFT;
+	plane->width = (val & _SPRITE_SIZE_WIDTH_MASK) >> _SPRITE_SIZE_WIDTH_SHIFT;
 	plane->height += 1;	/* raw height is one minus the real value */
-	width += 1;		/* raw width is one minus the real value */
-	if (plane->width != width)
-		vgt_warn("sprite_plane: plane->width=%d, width=%d\n",
-			plane->width, width);
+	plane->width += 1;		/* raw width is one minus the real value */
 
 	val = __vreg(vgt, VGT_SPRPOS(pipe));
 	plane->x_pos = (val & _SPRITE_POS_X_MASK) >> _SPRITE_POS_X_SHIFT;
