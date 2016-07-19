@@ -162,6 +162,8 @@ Contents
 	# LC_ALL=C make -j8
 	# cd -
 	# make install
+	# cp `pwd`/roms/seabios/out/bios.bin /usr/bin/bios.bin
+
 
 3.3.2 For XenGT
 
@@ -176,6 +178,7 @@ Contents
 	# ./configure --prefix=/usr  # XEN4.6 default path is /usr/local
 	# make -j8 xen tools
 	# cp xen/xen.gz /boot/xen-vgt.gz
+	# make install-tools PYTHON_PREFIX_ARG=
 
 
 3.4 Grub Setup
@@ -409,7 +412,7 @@ Contents
    To create a Guest, you could use the following command:
 
 	# /usr/bin/qemu-system-x86_64 -m 2048 -smp 2 \
-	-enable-kvm \
+	-bios /usr/bin/bios.bin -enable-kvm \
 	-M pc -machine kernel_irqchip=on \
 	-hda /path/to/Guest_OS.img \
 	-net nic -net tap,script=/path/to/qemu-ifup \
