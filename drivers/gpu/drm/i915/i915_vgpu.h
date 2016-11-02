@@ -181,6 +181,7 @@ typedef struct {
 	int aperture_sz; /* in MB */
 	int gm_sz;  /* in MB */
 	int fence_sz;
+	int cap;
 
 	int vgt_primary; /* 0/1: config the vgt device as secondary/primary VGA,
 						-1: means the ioemu doesn't supply a value */

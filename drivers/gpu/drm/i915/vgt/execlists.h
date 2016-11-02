@@ -258,6 +258,9 @@ struct execlist_context {
 	struct shadow_batch_buffer_per_ctx shadow_bb_per_ctx;
 
 	struct hlist_node node;
+
+	cycles_t submit_tsc;
+	cycles_t complete_tsc;
 };
 
 /* read execlist status or ctx status which are 64-bit MMIO

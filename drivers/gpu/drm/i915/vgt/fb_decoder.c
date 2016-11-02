@@ -219,11 +219,20 @@ int vgt_get_pixel_format_preskl(u32 plane_ctl,
 	return 0;
 }
 
-static u32 vgt_get_stride(struct vgt_device *vgt, int pipe, u32 tiled,
+static u32 vgt_get_stride(struct vgt_device *vgt, enum vgt_plane_type plane, int pipe, u32 tiled,
 			int stride_mask, int bpp)
 {
-	u32 stride_reg = __vreg(vgt, VGT_DSPSTRIDE(pipe)) & stride_mask;
-	u32 stride = stride_reg;
+	u32 stride_reg = 0;
+	u32 stride = 0;
+
+	if(plane == PRIMARY_PLANE)
+		stride_reg = __vreg(vgt, VGT_DSPSTRIDE(pipe)) & stride_mask;
+	else if(plane == SPRITE_PLANE)
+		stride_reg = __vreg(vgt, VGT_SPRSTRIDE(pipe)) & stride_mask;
+	else
+		vgt_warn("vgt_get_stride: unsupported plane:%d\n", plane);
+
+	stride = stride_reg;
 
 	if (IS_SKLPLUS(vgt->pdev)) {
 		switch (tiled) {
@@ -284,7 +293,7 @@ int vgt_decode_primary_plane_format(struct vgt_device *vgt,
 	memcpy(plane->drm_fmt_desc, com_plane_fmt.gen_pixel_format.desc, MAX_DRM_STR_SZ);
 
 	plane->base = __vreg(vgt, VGT_DSPSURF(pipe)) & GTT_PAGE_MASK;
-	plane->stride = vgt_get_stride(vgt, pipe, plane->tiled,
+	plane->stride = vgt_get_stride(vgt, PRIMARY_PLANE, pipe, plane->tiled,
 					com_plane_fmt.stride_mask, plane->bpp);
 
 	plane->width = (__vreg(vgt, VGT_PIPESRC(pipe)) & _PIPE_H_SRCSZ_MASK) >>
@@ -394,7 +403,7 @@ int vgt_decode_sprite_plane_format(struct vgt_device *vgt,
 	memcpy(plane->drm_fmt_desc, com_plane_fmt.gen_pixel_format.desc, MAX_DRM_STR_SZ);
 
 	plane->base = __vreg(vgt, VGT_SPRSURF(pipe)) & GTT_PAGE_MASK;
-	plane->stride = vgt_get_stride(vgt, pipe, plane->tiled,
+	plane->stride = vgt_get_stride(vgt, SPRITE_PLANE, pipe, plane->tiled,
 					com_plane_fmt.stride_mask, plane->bpp);
 
 	val = __vreg(vgt, VGT_SPRSIZE(pipe));
@@ -548,7 +557,7 @@ u8 vgt_get_tiling_mode(struct drm_device *dev, u32 tiling)
 
         if (IS_HASWELL(dev) || IS_BROADWELL(dev))
                 tiling_mode = (tiling ? I915_TILING_X : I915_TILING_NONE);
-        else if (IS_SKYLAKE(dev)) {
+        else if (IS_SKYLAKE(dev) || IS_KABYLAKE(dev)) {
                 switch (tiling) {
                 case PLANE_CTL_TILED_LINEAR:
                         tiling_mode = I915_TILING_NONE;
@@ -595,8 +604,8 @@ int vgt_decode_fb_format(int vmid, struct vgt_fb_format *fb)
 	if (!fb)
 		return -EINVAL;
 
-	if (!IS_PRESKL(pdev) && !IS_SKL(pdev)) {
-		vgt_err("fb decode Supported until SKL\n");
+	if (!IS_PRESKL(pdev) && !IS_SKL(pdev) && !IS_KBL(pdev)) {
+		vgt_err("fb decode Supported until KBL\n");
 		return -EINVAL;
 	}
 

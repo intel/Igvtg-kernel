@@ -19,10 +19,12 @@
 
 #include <linux/slab.h>
 #include "vgt.h"
+#include <linux/spinlock.h>
 
 struct kobject *vgt_ctrl_kobj;
 static struct kset *vgt_kset;
 static DEFINE_MUTEX(vgt_sysfs_lock);
+static DEFINE_SPINLOCK(snapshot_lock);
 
 static void vgt_kobj_release(struct kobject *kobj)
 {
@@ -49,24 +51,28 @@ static ssize_t vgt_create_instance_store(struct kobject *kobj, struct kobj_attri
 	* (where we want to release the vgt instance).
 	*/
 	(void)sscanf(buf, "%63s", param_str);
-	param_cnt = sscanf(param_str, "%d,%d,%d,%d,%d", &vp.vm_id, &low_gm_sz,
-		&high_gm_sz, &vp.fence_sz, &vp.vgt_primary);
+	param_cnt = sscanf(param_str, "%d,%d,%d,%d,%d,%d", &vp.vm_id,
+		&low_gm_sz, &high_gm_sz, &vp.fence_sz, &vp.vgt_primary,
+		&vp.cap);
 	vp.aperture_sz = low_gm_sz;
 	vp.gm_sz = high_gm_sz + low_gm_sz;
 
 	if (param_cnt == 1) {
 		if (vp.vm_id >= 0)
 			return -EINVAL;
-	} else if (param_cnt == 4 || param_cnt == 5) {
+	} else if (param_cnt == 4 || param_cnt == 5 || param_cnt == 6) {
 		if (!(vp.vm_id > 0 && vp.aperture_sz > 0 &&
 			vp.aperture_sz <= vp.gm_sz && vp.fence_sz > 0))
 			return -EINVAL;
 
-		if (param_cnt == 5) {
+		if (param_cnt == 5 || param_cnt == 6) {
 			/* -1/0/1 means: not-specified, non-primary, primary */
 			if (vp.vgt_primary < -1 || vp.vgt_primary > 1)
 				return -EINVAL;
+			if (vp.cap < 0 || vp.cap > 100)
+				return -EINVAL;
 		} else {
+			vp.cap = 0; /* The default, 0, means there is no upper cap. */
 			vp.vgt_primary = -1; /* no valid value specified. */
 		}
 	} else
@@ -831,6 +837,69 @@ const struct sysfs_ops vgt_kobj_sysfs_ops = {
 	.store	= kobj_attr_store,
 };
 
+static ssize_t
+dirty_bitmap_read(struct file *filp, struct kobject *kobj,
+		struct bin_attribute *bin_attr,
+		char *buf, loff_t off, size_t count)
+{
+	struct vgt_device *vgt = kobj_to_vgt(kobj);
+	int npages = 0;
+
+	if (!count || off < 0 || !logd_enable)
+		return -EINVAL;
+
+	vgt_dbg(VGT_DBG_MIGRATION, "off=0x%lx count=0x%lx \n",
+	       (unsigned long)off, (unsigned long)count);
+
+	npages = vgt_logd_read_log(vgt, buf, off, count);
+	return npages/BITS_PER_BYTE;
+}
+
+static ssize_t
+dirty_bitmap_write(struct file *filp, struct kobject *kobj,
+		struct bin_attribute *bin_attr,
+		char *buf, loff_t off, size_t count)
+{
+	struct vgt_device *vgt = kobj_to_vgt(kobj);
+	unsigned long gfn_start;
+	unsigned long npages;
+	unsigned long temp1, temp2;
+
+	if (!count || off < 0 || !logd_enable || (MAX_BITMAP_GPFN(vgt) == 0))
+		return -EINVAL;
+
+	vgt_dbg(VGT_DBG_MIGRATION, "off=0x%lx count=0x%lx \n",
+	       (unsigned long)off, (unsigned long)count);
+
+	/* every bit means a page */
+	gfn_start = off*BITS_PER_BYTE;
+	temp1 = find_next_bit((unsigned long *)buf, count * BITS_PER_BYTE, 0);
+	temp2 = find_next_zero_bit((unsigned long *)buf, count * BITS_PER_BYTE, temp1);
+	npages = temp2 - temp1;
+	gfn_start += temp1;
+
+	/*assume input as bits arrary:
+	 * buf[]: bits - 00000000 00011111 11111111 11110000
+	 * gfn_start = 11 + off*8
+	 * npages = 17
+	 */
+	vgt_logd_sync(vgt, gfn_start, npages);
+	if (off*BITS_PER_BYTE > MAX_BITMAP_GPFN(vgt))
+		return 0;
+	else if ((off + count)*BITS_PER_BYTE > MAX_BITMAP_GPFN(vgt))
+		return MAX_BITMAP_GPFN(vgt)/BITS_PER_BYTE - off;
+	else
+		return count;
+}
+
+static struct bin_attribute bitmap_attr = {
+	.attr =	{
+		.name = "dirty_bitmap",
+		.mode = 0660
+	},
+	.read = dirty_bitmap_read,
+	.write = dirty_bitmap_write,
+};
 
 /* copied code end */
 
@@ -864,6 +933,75 @@ static ssize_t aperture_base_va_show(struct kobject *kobj, struct kobj_attribute
 	return sprintf(buf, "%p\n", vgt->aperture_base_va);
 }
 
+static ssize_t schedule_show(struct kobject *kobj, struct kobj_attribute *attr,
+				   char *buf) {
+	struct pgt_device *pgt = &default_device;
+	struct vgt_device *vgt = kobj_to_vgt(kobj);
+	struct vgt_device *v = NULL;
+	ssize_t buf_len;
+	bool in_queue = false;
+	int cpu;
+
+	mutex_lock(&vgt_sysfs_lock);
+	vgt_lock_dev(pgt, cpu);
+	list_for_each_entry(v, &pgt->rendering_runq_head, list) {
+		if (v == vgt)
+			in_queue = true;
+	}
+	vgt_unlock_dev(pgt, cpu);
+	/*
+	 * ACTIVE: vgt own render now
+	 * DEACTIVE: vgt is not current renderowner
+	 * REMOVED: vgt is removed from run queue
+	 */
+	buf_len = sprintf(buf, "%s\n", in_queue ?
+		((current_render_owner(pgt) == vgt) ? "ACTIVE" : "DEACTIVE")
+		: "REMOVED");
+	mutex_unlock(&vgt_sysfs_lock);
+
+	return buf_len;
+}
+
+static ssize_t start_store(struct kobject *kobj, struct kobj_attribute *attr,
+			const char *buf, size_t count) {
+	struct vgt_device *vgt = kobj_to_vgt(kobj);
+	bool ret = false;
+
+	mutex_lock(&vgt_sysfs_lock);
+	if (strncmp("0", buf, 1) == 0)
+		ret = vgt_render_remove_from_schedule(vgt);
+	else if (strncmp("1", buf, 1) == 0)
+		ret = vgt_render_add_to_schedule(vgt);
+
+	vgt_info("%s vGPU for VM%d %s\n", buf, vgt->vm_id, ret ?
+		"succeed":"failed");
+	mutex_unlock(&vgt_sysfs_lock);
+	return count;
+}
+
+static ssize_t vgpu_hw_utilization_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+       struct vgt_device *vgt = kobj_to_vgt(kobj);
+       int utilization;
+       int cpu;
+
+       vgt_lock_dev(vgt->pdev, cpu);
+
+       if (vgt->sched_info.sched_time - vgt->stat.last_util_sched_time > 0) {
+               utilization = (vgt->sched_info.busy_time - vgt->stat.last_util_busy_time) *
+                       100 / (vgt->sched_info.sched_time - vgt->stat.last_util_sched_time);
+       } else {
+               utilization = 0;
+       }
+
+       vgt->stat.last_util_sched_time = vgt->sched_info.sched_time;
+       vgt->stat.last_util_busy_time = vgt->sched_info.busy_time;
+
+       vgt_unlock_dev(vgt->pdev, cpu);
+
+       return sprintf(buf, "%d\n", utilization);
+}
+
 static struct kobj_attribute vgt_id_attribute =
 	__ATTR_RO(vgt_id);
 
@@ -879,6 +1017,15 @@ static struct kobj_attribute aperture_base_attribute =
 static struct kobj_attribute aperture_base_va_attribute =
 	__ATTR_RO(aperture_base_va);
 
+static struct kobj_attribute schedule_attribute =
+	__ATTR_RO(schedule);
+
+static struct kobj_attribute start_attribute =
+	__ATTR_WO(start);
+
+static struct kobj_attribute vgpu_hw_utilization_attribute =
+        __ATTR_RO(vgpu_hw_utilization);
+
 /*
  * Create a group of attributes so that we can create and destroy them all
  * at once.
@@ -889,6 +1036,9 @@ static struct attribute *vgt_instance_attrs[] = {
 	&aperture_sz_attribute.attr,
 	&aperture_base_attribute.attr,
 	&aperture_base_va_attribute.attr,
+	&schedule_attribute.attr,
+	&start_attribute.attr,
+	&vgpu_hw_utilization_attribute.attr,
 	NULL,	/* need to NULL terminate the list of attributes */
 };
 
@@ -1005,6 +1155,122 @@ static struct bin_attribute igd_mmio_attr = {
 	.write = igd_mmio_write,
 };
 
+static ssize_t
+snapshot_read(struct file *filp, struct kobject *kobj,
+		struct bin_attribute *bin_attr,
+		char *buf, loff_t off, size_t count) {
+	struct vgt_device *vgt = kobj_to_vgt(kobj);
+	void *img_base;
+	int n_img_actual_size;
+	static struct file *singleton;
+
+	spin_lock(&snapshot_lock);
+	/* only one process can access image snapsot at the same time */
+	if (!singleton)
+		singleton = filp;
+	else if (singleton != filp) {
+		vgt_err("File already openned.");
+		return -EBUSY;
+	}
+	spin_unlock(&snapshot_lock);
+
+	if (!count || off < 0 || off + count > bin_attr->size || (off & 0x3))
+		return -EINVAL;
+
+	img_base = vgt_migration_acquire_snapshot(vgt);
+	if (img_base == NULL) {
+		vgt_err("Failed to get snapshot image\n");
+		return -EINVAL;
+	}
+
+	if (off == 0) {
+		/* save vgt snapshot to pre-allocated mem */
+		n_img_actual_size = vgt_migration_save_snapshot(vgt);
+		if (n_img_actual_size < 0) {
+			vgt_err("VM state save to image failed.\n");
+			vgt_migration_release_snapshot(vgt);
+			return -EINVAL;
+		}
+
+		vgt_dbg(VGT_DBG_MIGRATION, "actual img=%d, count=%d\n",
+			n_img_actual_size, (int)count);
+	}
+
+	memcpy(buf, img_base + off, count);
+
+	if ((off + count) == bin_attr->size) {
+		/* destroy snapshot memory */
+		vgt_migration_release_snapshot(vgt);
+		spin_lock(&snapshot_lock);
+		singleton = NULL;
+		spin_unlock(&snapshot_lock);
+	}
+
+	return count;
+}
+
+static ssize_t
+snapshot_write(struct file *filp, struct kobject *kobj,
+		struct bin_attribute *bin_attr,
+		char *buf, loff_t off, size_t count) {
+	struct vgt_device *vgt = kobj_to_vgt(kobj);
+	int n_img_actual_size;
+	void *img_base;
+	static struct file *singleton;
+
+	spin_lock(&snapshot_lock);
+	/* only one process can access image snapsot at the same time */
+	if (!singleton)
+		singleton = filp;
+	else if (singleton != filp) {
+		vgt_err("File already openned.");
+		return -EBUSY;
+	}
+	spin_unlock(&snapshot_lock);
+
+	if (!count || off < 0 || off + count > bin_attr->size || (off & 0x3))
+		return -EINVAL;
+
+	img_base = vgt_migration_acquire_snapshot(vgt);
+	if (img_base == NULL) {
+		vgt_err("Failed to get snapshot image\n");
+		return -EINVAL;
+	}
+
+	memcpy(img_base + off, buf, count);
+
+	if ((off + count) == bin_attr->size) {
+		/* load snapshot from file to vgt */
+		n_img_actual_size = vgt_migration_load_snapshot(vgt);
+		if (n_img_actual_size < 0) {
+			vgt_err("Required to write entirely at once. \
+					MAGIC_ID not find. required=0x%llx\n",
+				 MIGRATION_MAGIC_ID);
+			vgt_migration_release_snapshot(vgt);
+			return -EINVAL;
+		}
+
+		vgt_dbg(VGT_DBG_MIGRATION, "actual img=%d, count=%d\n",
+			n_img_actual_size, (int)count);
+
+		/* destroy snapshot memory */
+		vgt_migration_release_snapshot(vgt);
+		spin_lock(&snapshot_lock);
+		singleton = NULL;
+		spin_unlock(&snapshot_lock);
+	}
+	return count;
+}
+
+static struct bin_attribute snapshot_attr = {
+	.attr =	{
+		.name = "state",
+		.mode = 0660
+	},
+	.size = MIGRATION_IMG_MAX_SIZE,
+	.read = snapshot_read,
+	.write = snapshot_write,
+};
 
 static int vgt_add_state_sysfs(vgt_params_t vp)
 {
@@ -1044,6 +1310,21 @@ static int vgt_add_state_sysfs(vgt_params_t vp)
 					__func__, retval);
 		kobject_put(&vgt->kobj);
 	}
+	/* add migration operation node */
+	retval = sysfs_create_bin_file(&vgt->kobj, &snapshot_attr);
+	if (retval) {
+		printk(KERN_WARNING "%s: vgt kobject add error: %d\n",
+					__func__, retval);
+		kobject_put(&vgt->kobj);
+	}
+
+	/* add migration LOGD bitmap */
+	retval = sysfs_create_bin_file(&vgt->kobj, &bitmap_attr);
+	if (retval) {
+		printk(KERN_WARNING "%s: vgt kobject add error: %d\n",
+					__func__, retval);
+		kobject_put(&vgt->kobj);
+	}
 
 	for (i = 0; i < I915_MAX_PORTS; i++) {
 		retval = kobject_init_and_add(&vgt->ports[i].kobj,
@@ -1068,9 +1349,8 @@ static int vgt_add_state_sysfs(vgt_params_t vp)
 		}
 	}
 
-	if ((propagate_monitor_to_guest) && (vgt->vm_id != 0)) {
+	if (preallocated_monitor_to_guest == 0)
 		vgt_detect_display(vgt, -1);
-	}
 
 	return retval;
 

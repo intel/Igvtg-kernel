@@ -152,13 +152,9 @@ bool kvmgt_pio_igd_cfg(struct kvm_vcpu *vcpu)
 
 static unsigned long __kvmgt_gfn_to_pfn(struct kvm *kvm, gfn_t gfn)
 {
-	pfn_t pfn;
+	pfn_t pfn=INVALID_MFN;
 	struct kvm_memory_slot *slot;
 	bool unlock = false;
-
-	pfn = kvmgt_gfn_to_pfn_by_rmap(kvm, gfn);
-	if (!is_error_pfn(pfn))
-		return pfn;
 
 	/*
 	 * gfn_to_xxx() requires kvm->srcu lock, as per Documentation/virtual/kvm/locking.txt.
@@ -495,7 +491,7 @@ static void *kvmgt_gpa_to_hva(struct vgt_device *vgt, unsigned long gpa)
 	return (char *)pfn_to_kaddr(pfn) + offset_in_page(gpa);
 }
 
-static int kvmgt_inject_msi(int vm_id, u32 addr_lo, u16 data)
+static int kvmgt_inject_msi(struct vgt_device *vgt, u32 addr_lo, u16 data)
 {
 	struct kvm_msi info = {
 		.address_lo = addr_lo,
@@ -503,9 +499,13 @@ static int kvmgt_inject_msi(int vm_id, u32 addr_lo, u16 data)
 		.data = data,
 		.flags = 0,
 	};
-	struct kvm *kvm = kvmgt_find_by_domid(vm_id);
-	if (kvm == NULL)
+	struct kvm *kvm = NULL;
+	struct kvmgt_hvm_info *kvm_info =
+		(struct kvmgt_hvm_info *)(vgt->hvm_info);
+
+	if ((kvm_info == NULL) || (kvm_info->kvm == NULL))
 		return -ENOENT;
+	kvm = kvm_info->kvm;
 
 	memset(info.pad, 0, sizeof(info.pad));
 	kvm_send_userspace_msi(kvm, &info);
@@ -737,8 +737,10 @@ void kvmgt_protect_table_del(struct kvm *kvm, gfn_t gfn)
 		return;
 
 	p = __kvmgt_protect_table_find(kvm, gfn);
-	if (p)
+	if (p) {
 		hash_del(&p->hnode);
+		kfree(p);
+	}
 }
 
 bool kvmgt_gfn_is_write_protected(struct kvm *kvm, gfn_t gfn)

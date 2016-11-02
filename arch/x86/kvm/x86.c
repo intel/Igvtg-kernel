@@ -7866,6 +7866,7 @@ void kvm_arch_commit_memory_region(struct kvm *kvm,
 				enum kvm_mr_change change)
 {
 	int nr_mmu_pages = 0;
+	int slot = (u16)mem->slot;
 
 	if (change == KVM_MR_DELETE && old->id >= KVM_USER_MEM_SLOTS) {
 		int ret;
@@ -7877,10 +7878,10 @@ void kvm_arch_commit_memory_region(struct kvm *kvm,
 			       "kvm_vm_ioctl_set_memory_region: "
 			       "failed to munmap memory\n");
 	}
-	if ((mem->slot >= KVM_USER_MEM_SLOTS) &&
+	if ((slot >= KVM_USER_MEM_SLOTS) &&
 		(change == KVM_MR_DELETE) &&
-		(private_memslots[mem->slot - KVM_USER_MEM_SLOTS].arch_delete))
-			private_memslots[mem->slot - KVM_USER_MEM_SLOTS].arch_delete(kvm,
+		(private_memslots[slot - KVM_USER_MEM_SLOTS].arch_delete))
+			private_memslots[slot - KVM_USER_MEM_SLOTS].arch_delete(kvm,
 						mem, old);
 
 	if (!kvm->arch.n_requested_mmu_pages)

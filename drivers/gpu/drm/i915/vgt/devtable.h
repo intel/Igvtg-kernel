@@ -174,5 +174,38 @@ static inline int _is_skylake(int devid)
 	return 1;
 }
 
+static inline int _is_kabylake(int devid)
+{
+	switch ((devid >> 4) & 0xf) {
+	case 0:
+	case 1:
+	case 2:
+	case 3:
+		break;
+	default:
+		return 0;
+	}
+
+	devid &= ~0xf0;
+
+	switch (devid) {
+	case 0x5901:
+	case 0x5902:
+	case 0x5903:
+	case 0x5905:
+	case 0x5906:
+	case 0x5907:
+	case 0x590A:
+	case 0x590B:
+	case 0x590D:
+	case 0x590E:
+		break;
+	default:
+		return 0;
+	}
+
+	return 1;
+}
+
 
 #endif  /* _VGT_DEVTABLE_H */

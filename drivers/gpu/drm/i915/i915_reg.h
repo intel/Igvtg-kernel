@@ -1583,7 +1583,13 @@ enum skl_disp_power_wells {
 #define   RING_WAIT		(1<<11) /* gen3+, PRBx_CTL */
 #define   RING_WAIT_SEMAPHORE	(1<<10) /* gen6+ */
 
+#define RING_FORCE_TO_NONPRIV(base, i) (((base)+0x4D0) + (i)*4)
+#define   RING_MAX_NONPRIV_SLOTS  12
+
 #define GEN7_TLB_RD_ADDR	0x4700
+
+#define GAMT_CHKN_BIT_REG	0x4ab8
+#define   GAMT_CHKN_DISABLE_DYNAMIC_CREDIT_SHARING	(1<<28)
 
 #if 0
 #define PRB0_TAIL	0x02030
@@ -5884,6 +5890,7 @@ enum skl_disp_power_wells {
 #define CHICKEN_PAR1_1		0x42080
 #define  DPA_MASK_VBLANK_SRD	(1 << 15)
 #define  FORCE_ARB_IDLE_PLANES	(1 << 14)
+#define  SKL_EDP_PSR_FIX_RDWRAP	(1 << 3)
 
 #define _CHICKEN_PIPESL_1_A	0x420b0
 #define _CHICKEN_PIPESL_1_B	0x420b4
@@ -5911,15 +5918,25 @@ enum skl_disp_power_wells {
 #define SKL_DFSM_CDCLK_LIMIT_540	(1 << 23)
 #define SKL_DFSM_CDCLK_LIMIT_450	(2 << 23)
 #define SKL_DFSM_CDCLK_LIMIT_337_5	(3 << 23)
+#define SKL_DFSM_PIPE_A_DISABLE		(1 << 30)
+#define SKL_DFSM_PIPE_B_DISABLE		(1 << 21)
+#define SKL_DFSM_PIPE_C_DISABLE		(1 << 28)
+
+#define GEN7_FF_SLICE_CS_CHICKEN1	0x20e0
+#define   GEN9_FFSC_PERCTX_PREEMPT_CTRL	(1<<14)
 
 #define FF_SLICE_CS_CHICKEN2			0x20e4
 #define  GEN9_TSG_BARRIER_ACK_DISABLE		(1<<8)
+
+#define GEN9_CTX_PREEMPT_REG		0x2248
+#define GEN8_CS_CHICKEN1		0x2580
 
 /* GEN7 chicken */
 #define GEN7_COMMON_SLICE_CHICKEN1		0x7010
 # define GEN7_CSC1_RHWO_OPT_DISABLE_IN_RCC	((1<<10) | (1<<26))
 # define GEN9_RHWO_OPTIMIZATION_DISABLE		(1<<14)
 #define COMMON_SLICE_CHICKEN2			0x7014
+# define GEN8_SBE_DISABLE_REPLAY_BUF_OPTIMIZATION (1<<8)
 # define GEN8_CSC2_SBE_VUE_CACHE_CONSERVATIVE	(1<<0)
 
 #define HIZ_CHICKEN					0x7018
@@ -5960,6 +5977,8 @@ enum skl_disp_power_wells {
 #define  HDC_FORCE_CONTEXT_SAVE_RESTORE_NON_COHERENT	(1<<5)
 #define  HDC_FORCE_NON_COHERENT			(1<<4)
 #define  HDC_BARRIER_PERFORMANCE_DISABLE	(1<<10)
+
+#define GEN8_HDC_CHICKEN1			0x7304
 
 /* GEN9 chicken */
 #define SLICE_ECO_CHICKEN0			0x7308
@@ -6741,6 +6760,7 @@ enum skl_disp_power_wells {
 #define    EDRAM_ENABLED			0x1
 
 #define GEN6_UCGCTL1				0x9400
+# define GEN6_GAMUNIT_CLOCK_GATE_DISABLE		(1 << 22)
 # define GEN6_EU_TCUNIT_CLOCK_GATE_DISABLE		(1 << 16)
 # define GEN6_BLBUNIT_CLOCK_GATE_DISABLE		(1 << 5)
 # define GEN6_CSUNIT_CLOCK_GATE_DISABLE			(1 << 7)
@@ -6757,6 +6777,7 @@ enum skl_disp_power_wells {
 
 #define GEN7_UCGCTL4				0x940c
 #define  GEN7_L3BANK2X_CLOCK_GATE_DISABLE	(1<<25)
+#define  GEN8_EU_GAUNIT_CLOCK_GATE_DISABLE	(1<<14)
 
 #define GEN6_RCGCTL1				0x9410
 #define GEN6_RCGCTL2				0x9414
@@ -6995,6 +7016,7 @@ enum skl_disp_power_wells {
 #define   GEN9_CCS_TLB_PREFETCH_ENABLE	(1<<3)
 
 #define GEN8_ROW_CHICKEN		0xe4f0
+#define   FLOW_CONTROL_ENABLE		(1<<15)
 #define   PARTIAL_INSTRUCTION_SHOOTDOWN_DISABLE	(1<<8)
 #define   STALL_DOP_GATING_DISABLE		(1<<5)
 
@@ -7016,6 +7038,7 @@ enum skl_disp_power_wells {
 
 #define GEN9_HALF_SLICE_CHICKEN7	0xe194
 #define   GEN9_ENABLE_YV12_BUGFIX	(1<<4)
+#define   GEN9_ENABLE_GPGPU_PREEMPTION	(1<<2)
 
 /* Audio */
 #define G4X_AUD_VID_DID			(dev_priv->info.display_mmio_offset + 0x62020)

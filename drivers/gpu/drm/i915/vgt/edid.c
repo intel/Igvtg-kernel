@@ -29,6 +29,25 @@
 
 #include "vgt.h"
 
+static const u8 edid_default_data[EDID_SIZE] = {
+	0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00,
+	0x10, 0xac, 0x7b, 0xa0, 0x4c, 0x39, 0x56, 0x31,
+	0x03, 0x16, 0x01, 0x04,	0xa5, 0x34, 0x20, 0x78,
+	0x3a, 0xee, 0x95, 0xa3, 0x54, 0x4c, 0x99, 0x26,
+	0x0f, 0x50, 0x54, 0xa1, 0x08, 0x00, 0x81, 0x40,
+	0x81, 0x80, 0xa9, 0x40, 0xb3, 0x00, 0xd1, 0xc0,
+	0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x28, 0x3c,
+	0x80, 0xa0, 0x70, 0xb0, 0x23, 0x40, 0x30, 0x20,
+	0x36, 0x00, 0x06, 0x44, 0x21, 0x00, 0x00, 0x1a,
+	0x00, 0x00, 0x00, 0xff, 0x00, 0x59, 0x52, 0x34,
+	0x38, 0x56, 0x32, 0x31, 0x48, 0x31, 0x56, 0x39,
+	0x4c, 0x0a, 0x00, 0x00, 0x00, 0xfc, 0x00, 0x44,
+	0x45, 0x4c, 0x4c, 0x20, 0x55, 0x32, 0x34, 0x31,
+	0x32, 0x4d, 0x0a, 0x20, 0x00, 0x00, 0x00, 0xfd,
+	0x00, 0x32, 0x3d, 0x1e, 0x53, 0x11, 0x00, 0x0a,
+	0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x00, 0xbb
+};
+
 static const u8 edid_header[] = {
 	0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00
 };
@@ -573,7 +592,8 @@ bool vgt_i2c_handle_aux_ch_write(struct vgt_device *vgt,
 		if (i2c_edid->edid_available && i2c_edid->slave_selected) {
 			unsigned char val = edid_get_byte(vgt);
 			aux_data_for_write = (val << 16);
-		}
+		} else
+			aux_data_for_write = (0xff << 16);
 	}
 
 	/* write the return value in AUX_CH_DATA reg which includes:
@@ -601,4 +621,57 @@ void vgt_init_i2c_edid(struct vgt_device *vgt)
 
 	edid->aux_ch.i2c_over_aux_ch = false;
 	edid->aux_ch.aux_ch_mot = false;
+}
+
+bool vgt_init_default_monitor(struct vgt_device *vgt)
+{
+	int i = 0;
+	enum port port = 0;
+
+	if (vgt->vm_id == 0)
+		return true;
+
+	for (i = 0; i < preallocated_monitor_to_guest; i++) {
+
+		port = PORT_B + i;
+
+		if (port >= I915_MAX_PORTS) {
+			vgt_err("init monitor: port exceeds the maximum!\n");
+			break;
+		}
+
+		vgt->ports[port].type = VGT_DP_B + i;
+
+		if (vgt->ports[port].edid == NULL)
+			vgt->ports[port].edid = kmalloc(
+				sizeof(struct vgt_edid_data_t),	GFP_ATOMIC);
+
+		if (vgt->ports[port].edid == NULL) {
+			vgt_err("Memory allocation fail for EDID block!\n");
+			return false;
+		}
+
+		memcpy(vgt->ports[port].edid->edid_block,
+			edid_default_data, EDID_SIZE);
+		vgt->ports[port].edid->data_valid = true;
+
+		if (vgt->ports[port].dpcd == NULL)
+			vgt->ports[port].dpcd = kmalloc(
+				sizeof(struct vgt_dpcd_data), GFP_ATOMIC);
+
+		if (vgt->ports[port].dpcd == NULL) {
+			vgt_err("Memory allocation fail for dpcd block!\n");
+			return false;
+		}
+
+		memset(vgt->ports[port].dpcd->data, 0, DPCD_SIZE);
+		memcpy(vgt->ports[port].dpcd->data,
+			dpcd_fix_data, DPCD_HEADER_SIZE);
+		vgt->ports[port].dpcd->data_valid = true;
+	}
+
+	vgt_check_and_fix_port_mapping(vgt);
+	vgt_update_monitor_status(vgt);
+
+	return true;
 }

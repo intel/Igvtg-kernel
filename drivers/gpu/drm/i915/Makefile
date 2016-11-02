@@ -125,7 +125,9 @@ i915-$(CONFIG_I915_VGT)  += $(VGT)/vgt.o	\
 			   $(VGT)/vbios.o \
 			   $(VGT)/host.o \
 			   $(VGT)/execlists.o \
-			   $(VGT)/legacy/render_hsw.o
+			   $(VGT)/legacy/render_hsw.o \
+			   $(VGT)/migration.o \
+			   $(VGT)/logdirty.o \
 
 CFLAGS_i915_trace_points.o := -I$(src)
 

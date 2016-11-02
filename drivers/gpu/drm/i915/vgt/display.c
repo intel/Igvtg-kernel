@@ -414,6 +414,10 @@ void vgt_update_monitor_status(struct vgt_device *vgt)
 					_REGBIT_DP_C_HOTPLUG |
 					_REGBIT_DP_D_HOTPLUG);
 
+	if (IS_SKL(vgt->pdev))
+		__vreg(vgt, SDEISR) &= ~(SDE_PORTA_HOTPLUG_SPT |
+					SDE_PORTE_HOTPLUG_SPT);
+
 	if (dpy_has_monitor_on_port(vgt, PORT_B)) {
 		vgt_dbg(VGT_DBG_DPY, "enable B port monitor\n");
 		__vreg(vgt, SDEISR) |= _REGBIT_DP_B_HOTPLUG;
@@ -426,12 +430,18 @@ void vgt_update_monitor_status(struct vgt_device *vgt)
 		vgt_dbg(VGT_DBG_DPY, "enable D port monitor\n");
 		__vreg(vgt, SDEISR) |= _REGBIT_DP_D_HOTPLUG;
 	}
+	if (IS_SKL(vgt->pdev) && dpy_has_monitor_on_port(vgt, PORT_E)) {
+		vgt_dbg(VGT_DBG_DPY, "enable E port monitor\n");
+		__vreg(vgt, SDEISR) |= SDE_PORTE_HOTPLUG_SPT;
+	}
 	if (dpy_has_monitor_on_port(vgt, PORT_A)) {
 		__vreg(vgt, DDI_BUF_CTL_A) |= _DDI_BUFCTL_DETECT_MASK;
 		if (IS_PREBDW(vgt->pdev))
 			__vreg(vgt, DEISR) |= DE_DP_A_HOTPLUG_IVB;
-		else
+		else if (IS_BDW(vgt->pdev))
 			__vreg(vgt, GEN8_DE_PORT_ISR) |= GEN8_PORT_DP_A_HOTPLUG;
+		else
+			__vreg(vgt, SDEISR) |= SDE_PORTA_HOTPLUG_SPT;
 	}
 }
 
@@ -658,6 +668,105 @@ bool update_pipe_mapping(struct vgt_device *vgt, unsigned int physical_reg, uint
 	return true;
 }
 
+static void
+available_hw_trans(struct vgt_device *vgt,
+				enum transcoder *trans, vgt_reg_t *regvalue)
+{
+	int i;
+	vgt_reg_t hw_trans_value;
+	enum transcoder start_trans = *trans;
+
+	/*eDP DDI are skipped and need specific handling*/
+	for (i = start_trans; i <= TRANSCODER_C; i++) {
+		hw_trans_value = VGT_MMIO_READ(vgt->pdev,
+						_VGT_TRANS_DDI_FUNC_CTL(i));
+
+		if (TRANS_DDI_FUNC_ENABLE & hw_trans_value) {
+			*trans = i;
+			*regvalue = hw_trans_value;
+			return;
+		}
+	}
+
+	*trans = I915_MAX_TRANSCODERS;
+	*regvalue = 0;
+}
+
+void vgt_check_and_fix_port_mapping(struct vgt_device *vgt)
+{
+	int i;
+	vgt_reg_t hw_trans_value, vt_trans_value;
+	enum transcoder hw_trans;
+	unsigned int hw_trans_num = 0, vt_trans_num = 0;
+	enum port vt_port, hw_port;
+
+	/* Handle DDI EDP first */
+	hw_trans_value = VGT_MMIO_READ(vgt->pdev, TRANS_DDI_FUNC_CTL_EDP);
+	vt_trans_value = __vreg(vgt, TRANS_DDI_FUNC_CTL_EDP);
+
+	if ((TRANS_DDI_FUNC_ENABLE & vt_trans_value)) {
+		/* SourceVM has EDP eanbled */
+		if (TRANS_DDI_FUNC_ENABLE & hw_trans_value) {
+			/* target HW EDP available,
+			 * EDP dedicates connecting to PORT_A
+			 */
+			vgt->ports[PORT_A].port_override = PORT_A;
+		} else
+			vgt_warn("VM%d EDP display will be black.\n",
+					vgt->vm_id);
+	}
+
+	/* Handle other DDIs */
+	for (i = TRANSCODER_A, hw_trans = TRANSCODER_A;
+		i <= TRANSCODER_C; i++) {
+
+		vt_trans_value = __vreg(vgt, _VGT_TRANS_DDI_FUNC_CTL(i));
+		vt_port = (vt_trans_value & TRANS_DDI_PORT_MASK) >>
+				TRANS_DDI_PORT_SHIFT;
+
+		if (vt_port >= I915_MAX_PORTS) {
+			vgt_err("VM-%d: port mapping, %d exceed the maximum\n!",
+				vgt->vm_id, vt_port);
+			continue;
+		}
+
+		if (!(TRANS_DDI_FUNC_ENABLE & vt_trans_value))
+			continue;
+
+		/* Increase number of transcoder been found in guest*/
+		vt_trans_num++;
+
+		available_hw_trans(vgt, &hw_trans, &hw_trans_value);
+
+		if (hw_trans != I915_MAX_TRANSCODERS) {
+			/* The next transcoder to be found is based on the
+			 * current found
+			 */
+			hw_trans++;
+
+			/* Increase number of transcoder been found in host*/
+			hw_trans_num++;
+		} else {
+			vgt->ports[vt_port].port_override = I915_MAX_PORTS;
+			continue;
+		}
+
+		hw_port = (hw_trans_value & TRANS_DDI_PORT_MASK) >>
+			TRANS_DDI_PORT_SHIFT;
+		if (vgt->ports[vt_port].port_override != hw_port)
+			vgt_warn("VM-%d: port mapping override=[%d->%d]\n",
+				 vgt->vm_id,
+				 vgt->ports[vt_port].port_override,
+				 hw_port);
+		vgt->ports[vt_port].port_override = hw_port;
+	}
+
+	if (vt_trans_num > hw_trans_num) {
+		vgt_err("VM-%d: vt_trans_num %d, bigger than hw_trans_num %d\n",
+			vgt->vm_id, vt_trans_num, hw_trans_num);
+	}
+}
+
 /*
 TODO: 1, program watermark in vgt. 2, make sure dom0 set the max timing for
 each monitor in i915 driver
@@ -864,10 +973,8 @@ void vgt_set_power_well(struct vgt_device *vgt, bool to_enable)
 	}
 }
 
-#define DPCD_HEADER_SIZE	0xb
-
 u8 dpcd_fix_data[DPCD_HEADER_SIZE] = {
-	0x11, 0x0a, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+	0x12, 0x14, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
 
 static bool is_dp_port_type(enum vgt_port_type port_type)

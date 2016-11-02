@@ -242,6 +242,14 @@ vgt_reg_t vgt_gen9_render_regs[] = {
 	0x24d4,
 	0x24d8,
 	0x24dc,
+	0x24e0,
+	0x24e4,
+	0x24e8,
+	0x24ec,
+	0x24f0,
+	0x24f4,
+	0x24f8,
+	0x24fc,
 
 	_REG_VCS2_EXCC,
 	_REG_VECS_EXCC,
@@ -252,6 +260,15 @@ vgt_reg_t vgt_gen9_render_regs[] = {
 	_REG_VECS_EXECLIST_STATUS,
 	_REG_VCS2_EXECLIST_STATUS,
 	_REG_BCS_EXECLIST_STATUS,
+
+	GEN8_HDC_CHICKEN1,
+	GEN9_CTX_PREEMPT_REG,
+	GEN7_UCGCTL4,
+	GAMT_CHKN_BIT_REG,
+	GEN9_HALF_SLICE_CHICKEN7,
+
+	0x4ab0,
+	0x20d4,
 };
 
 static vgt_reg_t *vgt_get_extra_ctx_regs(void)
@@ -290,27 +307,63 @@ static void gen9_save_mocs(struct vgt_device *vgt)
 	struct pgt_device *pdev = vgt->pdev;
 	u32 reg;
 
-	for (reg = 0xc800; reg < 0xcff8; reg += 4)
-		__vreg(vgt, reg) = VGT_MMIO_READ(pdev, reg);
-
-	for (reg = 0xb020; reg < 0xb09c; reg += 4)
-		__vreg(vgt, reg) = VGT_MMIO_READ(pdev, reg);
+	if (!(mocs_saverestore_mode == MOCS_SAVE_RESTORE_LITE) ||
+		((mocs_saverestore_mode == MOCS_SAVE_RESTORE_LITE) &&
+		(vgt->vm_id == 0))) {
+		for (reg = 0xc800; reg < 0xcff8; reg += 4)
+			__vreg(vgt, reg) = VGT_MMIO_READ(pdev, reg);
+		for (reg = 0xb020; reg < 0xb09c; reg += 4)
+			__vreg(vgt, reg) = VGT_MMIO_READ(pdev, reg);
+	}
 }
 
-static void gen9_restore_mocs(struct vgt_device *vgt)
+static void gen9_restore_mocs(struct vgt_device *prev_vgt,
+	struct vgt_device *next_vgt)
 {
-	struct pgt_device *pdev = vgt->pdev;
+	struct pgt_device *pdev = next_vgt->pdev;
 	u32 reg;
 
-	for (reg = 0xc800; reg < 0xcff8; reg += 4) {
-		VGT_MMIO_WRITE(pdev, reg, __vreg(vgt, reg));
-		VGT_POST_READ(pdev, reg);
-	}
+	if (prev_vgt && mocs_saverestore_mode == MOCS_SAVE_RESTORE_LITE) {
+		for (reg = 0xc800; reg < 0xcff8; reg += 4) {
+			if (__vreg(prev_vgt, reg) != __vreg(next_vgt, reg)) {
+				VGT_MMIO_WRITE(pdev, reg, __vreg(next_vgt, reg));
+				VGT_POST_READ(pdev, reg);
+				pdev->stat.mocs_restore_cnt++;
+			}
+		}
+		for (reg = 0xb020; reg < 0xb09c; reg += 4) {
+			if (__vreg(prev_vgt, reg) != __vreg(next_vgt, reg)) {
+				VGT_MMIO_WRITE(pdev, reg, __vreg(next_vgt, reg));
+				VGT_POST_READ(pdev, reg);
+				pdev->stat.mocs_restore_cnt++;
+			}
+		}
+	} else {
+		for (reg = 0xc800; reg < 0xcff8; reg += 4) {
+			VGT_MMIO_WRITE(pdev, reg, __vreg(next_vgt, reg));
+			VGT_POST_READ(pdev, reg);
+			pdev->stat.mocs_restore_cnt++;
+		}
 
-	for (reg = 0xb020; reg < 0xb09c; reg += 4) {
-		VGT_MMIO_WRITE(pdev, reg, __vreg(vgt, reg));
-		VGT_POST_READ(pdev, reg);
+		for (reg = 0xb020; reg < 0xb09c; reg += 4) {
+			VGT_MMIO_WRITE(pdev, reg, __vreg(next_vgt, reg));
+			VGT_POST_READ(pdev, reg);
+			pdev->stat.mocs_restore_cnt++;
+		}
 	}
+}
+
+static void vgt_rendering_save_mocs(struct vgt_device *vgt)
+{
+	if (IS_SKL(vgt->pdev))
+		gen9_save_mocs(vgt);
+}
+
+static void vgt_rendering_restore_mocs(struct vgt_device *prev_vgt,
+	struct vgt_device *next_vgt)
+{
+	if (IS_SKL(next_vgt->pdev))
+		gen9_restore_mocs(prev_vgt, next_vgt);
 }
 
 /* For save/restore global states difference between VMs.
@@ -333,8 +386,7 @@ static void vgt_rendering_save_mmio(struct vgt_device *vgt)
 		__vgt_rendering_save(vgt,
 				vgt_get_extra_ctx_regs_num(),
 				vgt_get_extra_ctx_regs());
-	else if (IS_SKL(pdev)) {
-		gen9_save_mocs(vgt);
+	else if (IS_SKL(pdev) || IS_KBL(pdev)) {
 		__vgt_rendering_save(vgt,
 				ARRAY_NUM(vgt_gen9_render_regs),
 				&vgt_gen9_render_regs[0]);
@@ -397,8 +449,7 @@ static void vgt_rendering_restore_mmio(struct vgt_device *vgt)
 		__vgt_rendering_restore(vgt,
 				vgt_get_extra_ctx_regs_num(),
 				vgt_get_extra_ctx_regs());
-	else if (IS_SKL(pdev)) {
-		gen9_restore_mocs(vgt);
+	else if (IS_SKL(pdev) || IS_KBL(pdev)) {
 		__vgt_rendering_restore(vgt,
 				ARRAY_NUM(vgt_gen9_render_regs),
 				&vgt_gen9_render_regs[0]);
@@ -518,8 +569,7 @@ static bool gen8plus_ring_switch(struct pgt_device *pdev,
 	if (IS_BDW(pdev)) {
 		reg_num = ARRAY_SIZE(gen8_rcs_reset_mmio);
 		reset_mmio = gen8_rcs_reset_mmio;
-	}
-	else if (IS_SKL(pdev)) {
+	} else if (IS_SKL(pdev) || IS_KBL(pdev)) {
 		reg_num = ARRAY_SIZE(gen9_rcs_reset_mmio);
 		reset_mmio = gen9_rcs_reset_mmio;
 	}
@@ -642,7 +692,10 @@ bool vgt_do_render_context_switch(struct pgt_device *pdev)
 	pdev->stat.context_switch_num ++;
 	t1 = vgt_get_cycles();
 	pdev->stat.ring_idle_wait += t1 - t0;
+
 	prev->stat.schedule_out_time = t1;
+
+	vgt_timeslice_stat(prev);
 
 	vgt_sched_update_prev(prev, t0);
 
@@ -652,7 +705,7 @@ bool vgt_do_render_context_switch(struct pgt_device *pdev)
 
 	/* STEP-1: manually save render context */
 	vgt_rendering_save_mmio(prev);
-
+	vgt_rendering_save_mocs(prev);
 	/* STEP-2: HW render context switch */
 	for (i=0; i < pdev->max_engines; i++) {
 		if (!pdev->ring_buffer[i].need_switch)
@@ -665,6 +718,7 @@ bool vgt_do_render_context_switch(struct pgt_device *pdev)
 	}
 
 	/* STEP-3: manually restore render context */
+	vgt_rendering_restore_mocs(prev, next);
 	vgt_rendering_restore_mmio(next);
 
 	/* STEP-4: restore ring buffer structure */
@@ -724,8 +778,10 @@ err:
 			vgt_dom0->rb[i].sring.head,
 			vgt_dom0->rb[i].sring.tail,
 			vgt_dom0->rb[i].sring.start);
+	pdev->cur_reset_vm = prev;
 	show_ring_debug(pdev, i);
 	show_ring_buffer(pdev, i, 16 * sizeof(vgt_reg_t));
+	pdev->cur_reset_vm = NULL;
 	if (!enable_reset)
 		/* crash system now, to avoid causing more confusing errors */
 		ASSERT(0);

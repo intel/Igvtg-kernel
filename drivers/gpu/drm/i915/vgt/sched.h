@@ -33,6 +33,16 @@ struct vgt_sched_info {
 	vgt_tslice_t actual_end_time;
 	vgt_tslice_t rb_empty_delay;	/* cost for "wait rendering engines empty */
 
+	/* total sched time since start*/
+	vgt_tslice_t sched_time;
+	/* total HW active time since start*/
+	vgt_tslice_t busy_time;
+
+	/* used for longest unsched guest detection */
+	vgt_tslice_t last_ctx_submit_time;
+
+	int32_t cap;
+
 	int32_t priority;
 	int32_t weight;
 	int64_t time_slice;
@@ -47,5 +57,5 @@ struct vgt_hrtimer {
 #define VGT_TBS_PERIOD_MAX 15
 #define VGT_TBS_PERIOD_MIN 1
 #define VGT_TBS_DEFAULT_PERIOD(x) ((x) * 1000000) /* 15 ms */
-
+#define VGT_TS_BALANCE_PERIOD 100
 #endif /*_VGT_SCHED_H_*/

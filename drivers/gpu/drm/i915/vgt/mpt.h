@@ -107,7 +107,7 @@ static inline int hypervisor_inject_msi(struct vgt_device *vgt)
 
 	vgt_dbg(VGT_DBG_IRQ, "vGT: VM(%d): hvm injections. address (%x) data(%x)!\n",
 			vgt->vm_id, addr, data);
-	return vgt_pkdm->inject_msi(vgt->vm_id, addr, data);
+	return vgt_pkdm->inject_msi(vgt, addr, data);
 }
 
 static inline int hypervisor_hvm_init(struct vgt_device *vgt)

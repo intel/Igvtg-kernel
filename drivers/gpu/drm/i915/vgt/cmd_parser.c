@@ -46,8 +46,8 @@
 
 DEFINE_HASHTABLE(vgt_cmd_table, VGT_CMD_HASH_BITS);
 
-static inline int cmd_address_audit(struct parser_exec_state *s, unsigned long g_addr,
-	int op_size, bool index_mode);
+static inline int cmd_address_audit(struct parser_exec_state *s, uint64_t g_addr,
+	int op_size, bool index_mode, int offset);
 
 static void vgt_add_cmd_entry(struct vgt_cmd_entry *e)
 {
@@ -127,8 +127,6 @@ static inline int add_patch_entry(struct parser_exec_state *s,
 	struct cmd_general_info *list = &rs->patch_list;
 	struct cmd_patch_info *patch;
 	int next;
-
-	ASSERT(s->shadow != INDIRECT_CTX_SHADOW);
 
 	if (addr == NULL) {
 		vgt_err("VM(%d) CMD_SCAN: NULL address to be patched\n",
@@ -797,6 +795,38 @@ static bool is_shadowed_mmio(unsigned int offset)
 	return ret;
 }
 
+#define reg_is_mocs(offset) \
+	(((offset >= 0xC800) && (offset <= 0xCFF8)) || \
+	((offset >= 0xB020) && (offset <= 0xB0A0)))
+
+static int mocs_cmd_reg_handler(struct parser_exec_state *s,
+	unsigned int offset, unsigned int index)
+{
+	struct vgt_device *vgt = s->vgt;
+
+	if (!reg_is_mocs(offset))
+		return -1;
+	__sreg(vgt, offset) = __vreg(vgt, offset) = cmd_val(s, index + 1);
+	return 0;
+}
+
+#define reg_is_force_nonpriv(offset) \
+	(((offset) >= 0x24d0) && ((offset) < 0x2500))
+
+static int force_nonpriv_reg_handler(struct parser_exec_state *s,
+		unsigned int offset, unsigned int index)
+{
+	struct vgt_device *vgt = s->vgt;
+	vgt_reg_t data = cmd_val(s, index + 1);
+
+	if (!reg_is_render(vgt->pdev, data)) {
+		vgt_err("Unexpected forcenonpriv 0x%x LRI write, value=0x%x\n",
+				offset, data);
+		return -1;
+	}
+	return 0;
+}
+
 static int cmd_reg_handler(struct parser_exec_state *s,
 	unsigned int offset, unsigned int index, char *cmd)
 {
@@ -813,11 +843,16 @@ static int cmd_reg_handler(struct parser_exec_state *s,
 	}
 
 	if ((reg_is_render(pdev, offset) &&
-		!reg_addr_fix(pdev, offset) && offset != 0x24d0) ||
+		!reg_addr_fix(pdev, offset)) ||
 				reg_passthrough(pdev, offset) ||
 				reg_pt_readonly(pdev, offset) ||
 		(!vgt->vm_id && reg_is_config(pdev, offset))) {
-		rc = 0;
+		if (reg_is_mocs(offset))
+			rc = mocs_cmd_reg_handler(s, offset, index);
+		else if (reg_is_force_nonpriv(offset))
+			rc = force_nonpriv_reg_handler(s, offset, index);
+		else
+			rc = 0;
 	} else if (offset == _REG_DE_RRMR || offset == FORCEWAKE_MT) {
 		if (!strcmp(cmd, "lri")) {
 			rc = add_post_handle_entry(s, vgt_cmd_handler_lri_emulate);
@@ -890,7 +925,7 @@ static int vgt_cmd_handler_lrr(struct parser_exec_state *s)
 static int vgt_cmd_handler_lrm(struct parser_exec_state *s)
 {
 	int gmadr_bytes = s->vgt->pdev->device_info.gmadr_bytes_in_cmd;
-	unsigned long gma;
+	uint64_t gma;
 	int i, rc = 0;
 	int cmd_len = cmd_length(s);
 	struct pgt_device *pdev = s->vgt->pdev;
@@ -908,7 +943,7 @@ static int vgt_cmd_handler_lrm(struct parser_exec_state *s)
 			gma = cmd_val(s, i + 1) & BIT_RANGE_MASK(31, 2);
 			if (gmadr_bytes == 8)
 				gma |= (cmd_val(s, i + 2) & BIT_RANGE_MASK(15, 0)) << 32;
-			rc |= cmd_address_audit(s, gma, sizeof(uint32_t), false);
+			rc |= cmd_address_audit(s, gma, sizeof(uint32_t), false, i + 1);
 		}
 
 		i += gmadr_dw_number(s) + 1;
@@ -920,7 +955,7 @@ static int vgt_cmd_handler_lrm(struct parser_exec_state *s)
 static int vgt_cmd_handler_srm(struct parser_exec_state *s)
 {
 	int gmadr_bytes = s->vgt->pdev->device_info.gmadr_bytes_in_cmd;
-	unsigned long gma;
+	uint64_t gma;
 	int i, rc = 0;
 	int cmd_len = cmd_length(s);
 
@@ -932,7 +967,8 @@ static int vgt_cmd_handler_srm(struct parser_exec_state *s)
 			gma = cmd_val(s, i + 1) & BIT_RANGE_MASK(31, 2);
 			if (gmadr_bytes == 8)
 				gma |= (cmd_val(s, i + 2) & BIT_RANGE_MASK(15, 0)) << 32;
-			rc |= cmd_address_audit(s, gma, sizeof(uint32_t), false);
+
+			rc |= cmd_address_audit(s, gma, sizeof(uint32_t), false, i + 1);
 		}
 
 		i += gmadr_dw_number(s) + 1;
@@ -944,7 +980,7 @@ static int vgt_cmd_handler_srm(struct parser_exec_state *s)
 static int vgt_cmd_handler_pipe_control(struct parser_exec_state *s)
 {
 	int gmadr_bytes = s->vgt->pdev->device_info.gmadr_bytes_in_cmd;
-	unsigned long gma;
+	uint64_t gma;
 	bool index_mode = false;
 	int rc = 0;
 
@@ -959,7 +995,7 @@ static int vgt_cmd_handler_pipe_control(struct parser_exec_state *s)
 		else if ((cmd_val(s, 1) & (3 << 14)) == (3 << 14))
 			rc = cmd_reg_handler(s, _REG_RCS_TIMESTAMP, 1, "pipe_ctrl");
 		/* check ggtt*/
-		if ((cmd_val(s, 2) & (1 << 2))) {
+		if ((cmd_val(s, 1) & (1 << 24))) {
 			gma = cmd_val(s, 2) & BIT_RANGE_MASK(31, 3);
 			if (gmadr_bytes == 8)
 				gma |= (cmd_val(s, 3) & BIT_RANGE_MASK(15, 0)) << 32;
@@ -967,7 +1003,7 @@ static int vgt_cmd_handler_pipe_control(struct parser_exec_state *s)
 			if (cmd_val(s, 1) & (1 << 21))
 				index_mode = true;
 
-			rc |= cmd_address_audit(s, gma, sizeof(uint64_t), index_mode);
+			rc |= cmd_address_audit(s, gma, sizeof(uint64_t), index_mode, 2);
 		}
 	}
 
@@ -1158,7 +1194,7 @@ static bool display_flip_decode_plane_info(struct pgt_device *pdev,
 		uint32_t  plane_code, enum pipe *pipe,
 		enum vgt_plane_type *plane)
 {
-	if (IS_SKL(pdev)) {
+	if (IS_SKL(pdev) || IS_KBL(pdev)) {
 		plane_code <<= SKL_PLANE_SELECT_SHIFT;
 		switch (plane_code) {
 		case MI_DISPLAY_FLIP_SKL_PLANE_1_A:
@@ -1215,7 +1251,7 @@ static bool display_flip_encode_plane_info(struct pgt_device *pdev,
 		enum pipe pipe, enum vgt_plane_type plane,
 		uint32_t *plane_code)
 {
-	if (IS_SKL(pdev)) {
+	if (IS_SKL(pdev) || IS_KBL(pdev)) {
 		if (plane != PRIMARY_PLANE) {
 			vgt_err("only support primary_plane\n");
 			return false;
@@ -1294,10 +1330,10 @@ static bool vgt_flip_parameter_check(struct parser_exec_state *s,
 	GET_INFO_FOR_FLIP(pipe, plane,
 			ctrl_reg, surf_reg, stride_reg, stride_mask);
 
-	stride_mask = IS_SKL(pdev) ? SKL_PLANE_STRIDE_MASK : stride_mask;
-	tile_mask = IS_SKL(pdev) ? SKL_TILE_PARA_MASK : TILE_PARA_MASK;
-	plane_tile_mask = IS_SKL(pdev) ? PLANE_CTL_TILED_MASK : PLANE_TILE_MASK;
-	stride_shift = IS_SKL(pdev) ? _PRI_PLANE_STRIDE_SHIFT : 0;
+	stride_mask = (IS_SKL(pdev) || IS_KBL(pdev)) ? SKL_PLANE_STRIDE_MASK : stride_mask;
+	tile_mask = (IS_SKL(pdev) || IS_KBL(pdev)) ? SKL_TILE_PARA_MASK : TILE_PARA_MASK;
+	plane_tile_mask = (IS_SKL(pdev) || IS_KBL(pdev)) ? PLANE_CTL_TILED_MASK : PLANE_TILE_MASK;
+	stride_shift = (IS_SKL(pdev) || IS_KBL(pdev)) ? _PRI_PLANE_STRIDE_SHIFT : 0;
 
 	async_flip = ((surf_val & FLIP_TYPE_MASK) == 0x1);
 	tile_para = ((stride_val & tile_mask) >> TILE_PARA_SHIFT);
@@ -1341,18 +1377,19 @@ static int vgt_handle_mi_display_flip(struct parser_exec_state *s)
 	int surf_size = 0;
 	uint32_t plane_select_mask, plane_select_shift;
 	uint32_t tile_mask, plane_tile_mask, stride_shift;
+	uint64_t surf_gma;
 
 	opcode = cmd_val(s, 0);
 	stride_val = cmd_val(s, 1);
 	surf_val = cmd_val(s, 2);
 
-	plane_select_mask = IS_SKL(pdev) ? SKL_PLANE_SELECT_MASK :
+	plane_select_mask = (IS_SKL(pdev) || IS_KBL(pdev)) ? SKL_PLANE_SELECT_MASK :
 		PLANE_SELECT_MASK;
-	plane_select_shift = IS_SKL(pdev) ? SKL_PLANE_SELECT_SHIFT :
+	plane_select_shift = (IS_SKL(pdev) || IS_KBL(pdev)) ? SKL_PLANE_SELECT_SHIFT :
 		PLANE_SELECT_MASK;
-	tile_mask = IS_SKL(pdev) ? SKL_TILE_PARA_MASK : TILE_PARA_MASK;
-	plane_tile_mask = IS_SKL(pdev) ? PLANE_CTL_TILED_MASK : PLANE_TILE_MASK;
-	stride_shift = IS_SKL(pdev) ? _PRI_PLANE_STRIDE_SHIFT : 0;
+	tile_mask = (IS_SKL(pdev) || IS_KBL(pdev)) ? SKL_TILE_PARA_MASK : TILE_PARA_MASK;
+	plane_tile_mask = (IS_SKL(pdev) || IS_KBL(pdev)) ? PLANE_CTL_TILED_MASK : PLANE_TILE_MASK;
+	stride_shift = (IS_SKL(pdev) || IS_KBL(pdev)) ? _PRI_PLANE_STRIDE_SHIFT : 0;
 
 	plane_code = (opcode & plane_select_mask) >> plane_select_shift;
 	length = cmd_length(s);
@@ -1373,12 +1410,16 @@ static int vgt_handle_mi_display_flip(struct parser_exec_state *s)
 	}
 
 	{
+		surf_gma = surf_val & BIT_RANGE_MASK(31, 12);
+		rc = g2h_gm(vgt, &surf_gma);
+		if (rc < 0)
+			return rc;
 		vgt_flip_parameter_check(s, plane_code, stride_val, surf_val);
 
 		GET_INFO_FOR_FLIP(pipe, plane,
 			ctrl_reg, surf_reg, stride_reg, stride_mask);
 
-		stride_mask = IS_SKL(pdev) ? SKL_PLANE_STRIDE_MASK :
+		stride_mask = (IS_SKL(pdev) || IS_KBL(pdev)) ? SKL_PLANE_STRIDE_MASK :
 			stride_mask;
 		tile_para = ((stride_val & tile_mask) >> TILE_PARA_SHIFT);
 
@@ -1391,7 +1432,7 @@ static int vgt_handle_mi_display_flip(struct parser_exec_state *s)
 				(__vreg(s->vgt, surf_reg) & (~SURF_MASK));
 		__sreg(s->vgt, stride_reg) = __vreg(s->vgt, stride_reg);
 		__sreg(s->vgt, ctrl_reg) = __vreg(s->vgt, ctrl_reg);
-		__sreg(s->vgt, surf_reg) = __vreg(s->vgt, surf_reg);
+		__sreg(s->vgt, surf_reg) = surf_gma | (__vreg(s->vgt, surf_reg) & (~SURF_MASK));
 
 		if (plane == PRIMARY_PLANE) {
 			struct vgt_primary_plane_format pri_fmt;
@@ -1405,14 +1446,16 @@ static int vgt_handle_mi_display_flip(struct parser_exec_state *s)
 			struct vgt_sprite_plane_format spr_fmt;
 			if (!vgt_decode_sprite_plane_format(vgt, real_pipe, &spr_fmt)) {
 				if (spr_fmt.enabled)
-					surf_size = spr_fmt.height * spr_fmt.width * spr_fmt.bpp / 8 ;
+					surf_size = spr_fmt.height
+						* spr_fmt.stride;
 			} else {
 				return -1;
 			}
 		}
-		rc = cmd_address_audit(s, surf_val & BIT_RANGE_MASK(31, 12), surf_size, false);
+		rc = cmd_address_audit(s, surf_val & BIT_RANGE_MASK(31, 12), surf_size, false, -1);
 		if (rc < 0)
 			return rc;
+		add_patch_entry(s, cmd_ptr(s, 2), surf_gma | (surf_val & BIT_RANGE_MASK(11, 0)));
 	}
 
 	__vreg(s->vgt, VGT_PIPE_FLIPCOUNT(pipe))++;
@@ -1557,11 +1600,12 @@ static unsigned long get_gma_bb_from_cmd(struct parser_exec_state *s, int index)
 	return addr;
 }
 
-static inline int cmd_address_audit(struct parser_exec_state *s, unsigned long g_addr,
-	int op_size, bool index_mode)
+static inline int cmd_address_audit(struct parser_exec_state *s, uint64_t g_addr,
+	int op_size, bool index_mode, int offset)
 {
 	struct vgt_device *vgt = s->vgt;
 	int max_surface_size = vgt->pdev->device_info.max_surface_size;
+	int gmadr_bytes = s->vgt->pdev->device_info.gmadr_bytes_in_cmd;
 	int i;
 	int rc = 0;
 
@@ -1576,13 +1620,12 @@ static inline int cmd_address_audit(struct parser_exec_state *s, unsigned long g
 	if (index_mode)	{
 		if (g_addr >= PAGE_SIZE/sizeof(uint64_t))
 			rc = -1;
-	} else if ((!g_gm_is_valid(vgt, g_addr))
-		|| (!g_gm_is_valid(vgt, g_addr + op_size - 1))) {
+	} else if (g2h_gm_range(vgt, &g_addr, op_size)) {
 		rc = -1;
 	}
 
 	if (rc < 0) {
-		vgt_err("cmd_parser: Malicious %s detected, addr=0x%lx, len=%d!\n",
+		vgt_err("cmd_parser: Malicious %s detected, addr=0x%llx, len=%d!\n",
 			s->info->name, g_addr, op_size);
 
 		printk("cmd dump: ");
@@ -1595,6 +1638,11 @@ static inline int cmd_address_audit(struct parser_exec_state *s, unsigned long g
 		printk("\ncurrent VM addr range: visible 0x%llx - 0x%llx, hidden 0x%llx - 0x%llx\n",
 			vgt_guest_visible_gm_base(vgt), vgt_guest_visible_gm_end(vgt),
 			vgt_guest_hidden_gm_base(vgt), vgt_guest_hidden_gm_end(vgt));
+	} else if (offset > 0) {
+		add_patch_entry(s, cmd_ptr(s, offset), g_addr & BIT_RANGE_MASK(31, 2));
+		if (gmadr_bytes == 8)
+			add_patch_entry(s, cmd_ptr(s, offset + 1),
+				(g_addr >> 32) & BIT_RANGE_MASK(15, 0));
 	}
 
 	return rc;
@@ -1605,7 +1653,8 @@ static int vgt_cmd_handler_mi_store_data_imm(struct parser_exec_state *s)
 	int gmadr_bytes = s->vgt->pdev->device_info.gmadr_bytes_in_cmd;
 	int op_size = (cmd_length(s) - 3) * sizeof(uint32_t);
 	int core_id = (cmd_val(s, 2) & (1 << 0)) ? 1 : 0;
-	unsigned long gma, gma_low, gma_high;
+	uint64_t gma;
+	unsigned long gma_low, gma_high;
 	int rc = 0;
 
 	/* check ppggt */
@@ -1621,7 +1670,7 @@ static int vgt_cmd_handler_mi_store_data_imm(struct parser_exec_state *s)
 		core_id = (cmd_val(s, 1) & (1 << 0)) ? 1 : 0;
 	}
 
-	rc = cmd_address_audit(s, gma + op_size * core_id, op_size, false);
+	rc = cmd_address_audit(s, gma + op_size * core_id, op_size, false, 1);
 
 	return rc;
 }
@@ -1667,7 +1716,8 @@ static int vgt_cmd_handler_mi_op_2f(struct parser_exec_state *s)
 	int gmadr_bytes = s->vgt->pdev->device_info.gmadr_bytes_in_cmd;
 	int op_size = (1 << (cmd_val(s, 0) & BIT_RANGE_MASK(20, 19) >> 19)) *
 				sizeof(uint32_t);
-	unsigned long gma, gma_high;
+	uint64_t gma;
+	unsigned long gma_high;
 	int rc = 0;
 
 	if (!(cmd_val(s, 0) & (1 << 22)))
@@ -1678,7 +1728,7 @@ static int vgt_cmd_handler_mi_op_2f(struct parser_exec_state *s)
 		gma_high = cmd_val(s, 2) & BIT_RANGE_MASK(15, 0);
 		gma = (gma_high << 32) | gma;
 	}
-	rc = cmd_address_audit(s, gma, op_size, false);
+	rc = cmd_address_audit(s, gma, op_size, false, 1);
 
 	return rc;
 }
@@ -1728,7 +1778,7 @@ static int vgt_cmd_handler_mi_update_gtt(struct parser_exec_state *s)
 static int vgt_cmd_handler_mi_flush_dw(struct parser_exec_state* s)
 {
 	int gmadr_bytes = s->vgt->pdev->device_info.gmadr_bytes_in_cmd;
-	unsigned long gma;
+	uint64_t gma;
 	bool index_mode = false;
 	int rc = 0;
 
@@ -1742,7 +1792,7 @@ static int vgt_cmd_handler_mi_flush_dw(struct parser_exec_state* s)
 		if (cmd_val(s, 0) & (1 << 21))
 			index_mode = true;
 
-		rc = cmd_address_audit(s, gma, sizeof(uint64_t), index_mode);
+		rc = cmd_address_audit(s, (gma | (1 << 2)), sizeof(uint64_t), index_mode, 1);
 	}
 	/* Check notify bit */
 	if (!rc)
@@ -1768,7 +1818,7 @@ static int batch_buffer_needs_scan(struct parser_exec_state *s)
 {
 	struct pgt_device *pdev = s->vgt->pdev;
 
-	if (IS_BDW(pdev) || IS_SKL(pdev)) {
+	if (IS_BDW(pdev) || IS_SKL(pdev) || IS_KBL(pdev)) {
 		/* BDW decides privilege based on address space */
 		if (cmd_val(s, 0) & (1 << 8))
 			return 0;
@@ -2965,8 +3015,8 @@ static int vgt_copy_indirect_ctx_to_shadow(struct vgt_device *vgt,
 
 {
 	uint32_t left_len = el_ctx->shadow_indirect_ctx.ctx_size;
-	unsigned long  vbase = el_ctx->shadow_indirect_ctx.guest_ctx_base;
-	unsigned long  sbase = el_ctx->shadow_indirect_ctx.shadow_ctx_base;
+	unsigned long vbase = el_ctx->shadow_indirect_ctx.guest_ctx_base;
+	unsigned long sbase = el_ctx->shadow_indirect_ctx.shadow_ctx_base;
 	uint32_t ctx_offset = 0;
 	void *ip_sva = NULL;
 

@@ -1017,11 +1017,8 @@ static struct intel_context *
 i915_gem_validate_context(struct drm_device *dev, struct drm_file *file,
 			  struct intel_engine_cs *ring, const u32 ctx_id)
 {
-	struct intel_context *ctx = NULL;
+	struct intel_context *ctx;
 	struct i915_ctx_hang_stats *hs;
-
-	if (ring->id != RCS && ctx_id != DEFAULT_CONTEXT_HANDLE)
-		return ERR_PTR(-EINVAL);
 
 	ctx = i915_gem_context_get(file->driver_priv, ctx_id);
 	if (IS_ERR(ctx))

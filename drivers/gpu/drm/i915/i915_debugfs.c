@@ -1272,18 +1272,21 @@ static int i915_frequency_info(struct seq_file *m, void *unused)
 
 		max_freq = (IS_BROXTON(dev) ? rp_state_cap >> 0 :
 			    rp_state_cap >> 16) & 0xff;
-		max_freq *= (IS_SKYLAKE(dev) ? GEN9_FREQ_SCALER : 1);
+		max_freq *= (IS_SKYLAKE(dev) || IS_KABYLAKE(dev) ?
+			     GEN9_FREQ_SCALER : 1);
 		seq_printf(m, "Lowest (RPN) frequency: %dMHz\n",
 			   intel_gpu_freq(dev_priv, max_freq));
 
 		max_freq = (rp_state_cap & 0xff00) >> 8;
-		max_freq *= (IS_SKYLAKE(dev) ? GEN9_FREQ_SCALER : 1);
+		max_freq *= (IS_SKYLAKE(dev) || IS_KABYLAKE(dev) ?
+			     GEN9_FREQ_SCALER : 1);
 		seq_printf(m, "Nominal (RP1) frequency: %dMHz\n",
 			   intel_gpu_freq(dev_priv, max_freq));
 
 		max_freq = (IS_BROXTON(dev) ? rp_state_cap >> 16 :
 			    rp_state_cap >> 0) & 0xff;
-		max_freq *= (IS_SKYLAKE(dev) ? GEN9_FREQ_SCALER : 1);
+		max_freq *= (IS_SKYLAKE(dev) || IS_KABYLAKE(dev) ?
+			     GEN9_FREQ_SCALER : 1);
 		seq_printf(m, "Max non-overclocked (RP0) frequency: %dMHz\n",
 			   intel_gpu_freq(dev_priv, max_freq));
 		seq_printf(m, "Max overclocked frequency: %dMHz\n",
@@ -1821,7 +1824,7 @@ static int i915_ring_freq_table(struct seq_file *m, void *unused)
 	if (ret)
 		goto out;
 
-	if (IS_SKYLAKE(dev)) {
+	if (IS_SKYLAKE(dev) || IS_KABYLAKE(dev)) {
 		/* Convert GT frequency to 50 HZ units */
 		min_gpu_freq =
 			dev_priv->rps.min_freq_softlimit / GEN9_FREQ_SCALER;
@@ -1841,7 +1844,8 @@ static int i915_ring_freq_table(struct seq_file *m, void *unused)
 				       &ia_freq);
 		seq_printf(m, "%d\t\t%d\t\t\t\t%d\n",
 			   intel_gpu_freq(dev_priv, (gpu_freq *
-				(IS_SKYLAKE(dev) ? GEN9_FREQ_SCALER : 1))),
+				(IS_SKYLAKE(dev) || IS_KABYLAKE(dev) ?
+				 GEN9_FREQ_SCALER : 1))),
 			   ((ia_freq >> 0) & 0xff) * 100,
 			   ((ia_freq >> 8) & 0xff) * 100);
 	}
@@ -3125,9 +3129,11 @@ static int i915_wa_registers(struct seq_file *m, void *unused)
 {
 	int i;
 	int ret;
+	struct intel_engine_cs *ring;
 	struct drm_info_node *node = (struct drm_info_node *) m->private;
 	struct drm_device *dev = node->minor->dev;
 	struct drm_i915_private *dev_priv = dev->dev_private;
+	struct i915_workarounds *workarounds = &dev_priv->workarounds;
 
 	ret = mutex_lock_interruptible(&dev->struct_mutex);
 	if (ret)
@@ -3135,14 +3141,17 @@ static int i915_wa_registers(struct seq_file *m, void *unused)
 
 	intel_runtime_pm_get(dev_priv);
 
-	seq_printf(m, "Workarounds applied: %d\n", dev_priv->workarounds.count);
-	for (i = 0; i < dev_priv->workarounds.count; ++i) {
+	seq_printf(m, "Workarounds applied: %d\n", workarounds->count);
+	for_each_ring(ring, dev_priv, i)
+		seq_printf(m, "HW whitelist count for %s: %d\n",
+			   ring->name, workarounds->hw_whitelist_count[i]);
+	for (i = 0; i < workarounds->count; ++i) {
 		u32 addr, mask, value, read;
 		bool ok;
 
-		addr = dev_priv->workarounds.reg[i].addr;
-		mask = dev_priv->workarounds.reg[i].mask;
-		value = dev_priv->workarounds.reg[i].value;
+		addr = workarounds->reg[i].addr;
+		mask = workarounds->reg[i].mask;
+		value = workarounds->reg[i].value;
 		read = I915_READ(addr);
 		ok = (value & mask) == (read & mask);
 		seq_printf(m, "0x%X: 0x%08X, mask: 0x%08X, read: 0x%08x, status: %s\n",
@@ -5050,7 +5059,7 @@ static void gen9_sseu_device_status(struct drm_device *dev,
 
 		stat->slice_total++;
 
-		if (IS_SKYLAKE(dev))
+		if (IS_SKYLAKE(dev) || IS_KABYLAKE(dev))
 			ss_cnt = INTEL_INFO(dev)->subslice_per_slice;
 
 		for (ss = 0; ss < ss_max; ss++) {

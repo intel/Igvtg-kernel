@@ -37,6 +37,10 @@ struct vgt_statistics {
 	u64	schedule_in_time;	/* TSC time when it is last scheduled in */
 	u64	schedule_out_time;
 	u64	last_vblank_time;
+	u64	last_sched_time;
+	u64	last_busy_time;
+	u64	last_util_busy_time;
+	u64	last_util_sched_time;
 	u64	allocated_cycles;
 	u64	used_cycles;
 	u64	irq_num;
@@ -113,6 +117,7 @@ struct pgt_statistics {
 	u64	oos_page_detach_cnt;
 	u64	context_switch_cost;
 	u64	context_switch_num;
+	u64	mocs_restore_cnt;
 	u64	ring_idle_wait;
 	u64	ring_0_idle;
 	u64	ring_0_busy;

@@ -33,6 +33,9 @@ enum vgt_uevent_type;
 /* DPCD start */
 #define DPCD_SIZE	0x700
 
+#define DPCD_HEADER_SIZE	0xb
+extern u8 dpcd_fix_data[DPCD_HEADER_SIZE];
+
 /* DPCD addresses */
 #define DPCD_REV			0x000
 #define DPCD_MAX_LINK_RATE		0x001
@@ -301,6 +304,8 @@ void vgt_update_monitor_status(struct vgt_device *vgt);
 bool rebuild_pipe_mapping(struct vgt_device *vgt, unsigned int reg, uint32_t new_data, uint32_t old_data);
 
 bool update_pipe_mapping(struct vgt_device *vgt, unsigned int physical_reg, uint32_t physical_wr_data);
+
+void vgt_check_and_fix_port_mapping(struct vgt_device *vgt);
 
 bool set_panel_fitting(struct vgt_device *vgt, enum pipe pipe);
 

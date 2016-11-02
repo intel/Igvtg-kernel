@@ -66,7 +66,7 @@ void i915_check_vgpu(struct drm_device *dev)
 
 	BUILD_BUG_ON(sizeof(struct vgt_if) != VGT_PVINFO_SIZE);
 
-	if (!IS_HASWELL(dev) && !IS_BROADWELL(dev) && !IS_SKYLAKE(dev))
+	if (!IS_HASWELL(dev) && !IS_BROADWELL(dev) && !IS_SKYLAKE(dev) && !IS_KABYLAKE(dev))
 		return;
 
 	magic = I915_READ64(vgtif_reg(magic));

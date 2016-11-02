@@ -193,7 +193,7 @@ void show_mode_settings(struct pgt_device *pdev)
 		SHOW_MODE(CACHE_MODE_0_GEN7);
 		SHOW_MODE(CACHE_MODE_1);
 		SHOW_MODE(GEN7_GT_MODE);
-	} else if (IS_BDWGT3(pdev) || IS_SKLGT3(pdev) || IS_SKLGT4(pdev)) {
+	} else if (IS_BDWGT3(pdev) || IS_SKLGT3(pdev) || IS_SKLGT4(pdev) || IS_KBLGT3(pdev) || IS_KBLGT4(pdev)) {
 		SHOW_MODE(_REG_VCS2_MI_MODE);
 		SHOW_MODE(_REG_VCS2_MFX_MODE_BDW);
 		SHOW_MODE(_REG_VCS2_INSTPM);
@@ -1083,7 +1083,7 @@ int vgt_hvm_map_aperture (struct vgt_device *vgt, int map)
 		bar_s = * (uint32_t*) cfg_space;
 	}
 
-	first_gfn = (bar_s + vgt_aperture_offset(vgt)) >> PAGE_SHIFT;
+	first_gfn = (bar_s + vgt_guest_visible_gm_base(vgt)) >> PAGE_SHIFT;
 	first_mfn = vgt_aperture_base(vgt) >> PAGE_SHIFT;
 	if (!vgt->ballooning)
 		nr_mfns = vgt->state.bar_size[1] >> PAGE_SHIFT;

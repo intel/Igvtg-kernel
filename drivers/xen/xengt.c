@@ -518,10 +518,10 @@ static void *xen_mfn_to_virt(int mfn)
 	return mfn_to_virt(mfn);
 }
 
-static int xen_inject_msi(int vm_id, u32 addr_lo, u16 data)
+static int xen_inject_msi(struct vgt_device *vgt, u32 addr_lo, u16 data)
 {
 	struct xen_hvm_inject_msi info = {
-		.domid	= vm_id,
+		.domid	= vgt->vm_id,
 		.addr	= addr_lo, /* only low addr used */
 		.data	= data,
 	};

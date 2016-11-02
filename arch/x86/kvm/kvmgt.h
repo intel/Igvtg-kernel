@@ -46,8 +46,6 @@ bool kvmgt_write_protect(struct kvm *kvm, gfn_t gfn, bool add);
 bool kvmgt_gfn_is_write_protected(struct kvm *kvm, gfn_t gfn);
 bool kvmgt_emulate_write(struct kvm *kvm, gpa_t gpa, const void *val, int len);
 
-pfn_t kvmgt_gfn_to_pfn_by_rmap(struct kvm *kvm, gfn_t gfn);
-
 extern bool passthrough_msrs;
 static inline bool kvmgt_is_passthrough_msr(u32 msr)
 {

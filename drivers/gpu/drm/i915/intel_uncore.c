@@ -1532,7 +1532,8 @@ static int gen8_do_reset(struct drm_device *dev)
 				      RESET_CTL_READY_TO_RESET,
 				      700)) {
 			DRM_ERROR("%s: reset request timeout\n", engine->name);
-			goto not_ready;
+			if (!i915.reset)
+				goto not_ready;
 		}
 	}
 

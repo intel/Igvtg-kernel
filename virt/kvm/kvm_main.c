@@ -904,9 +904,6 @@ int __kvm_set_memory_region(struct kvm *kvm,
 	new.base_gfn = base_gfn;
 	new.npages = npages;
 	new.flags = mem->flags;
-#ifdef CONFIG_KVMGT
-	new.pfn_list = NULL;
-#endif
 
 	if (npages) {
 		if (!old.npages)
@@ -980,8 +977,13 @@ int __kvm_set_memory_region(struct kvm *kvm,
 		/* slot was deleted or moved, clear iommu mapping */
 		kvm_iommu_unmap_pages(kvm, &old);
 #ifdef CONFIG_KVMGT
-		kvmgt_unpin_slot(kvm, &old);
+		/* clear new.pfn_list */
+		new.pfn_list = NULL;
+
+		if (as_id == 0)
+			kvmgt_unpin_slot(kvm, &old);
 #endif
+
 		/* From this point no new shadow pages pointing to a deleted,
 		 * or moved, memslot will be created.
 		 *

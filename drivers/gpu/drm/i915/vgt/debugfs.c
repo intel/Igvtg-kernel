@@ -1157,6 +1157,63 @@ static const struct file_operations vgt_el_context_fops = {
 	.release = single_release,
 };
 
+static int vgt_qos_stat_show(struct seq_file *m, void *data)
+{
+	struct pgt_device *pdev = (struct pgt_device *)m->private;
+	struct vgt_device *vgt = NULL;
+	static u64 last_record_time, cur_record_time;
+	int cpu;
+
+	vgt_lock_dev(pdev, cpu);
+
+	cur_record_time  = vgt_get_cycles();
+
+	list_for_each_entry(vgt, &pdev->rendering_runq_head, list) {
+		seq_printf(m, "VM-%d Sched time: %llu",
+			vgt->vm_id, vgt->sched_info.sched_time);
+		seq_printf(m, " Busy time: %llu",
+			vgt->sched_info.busy_time);
+
+		if (cur_record_time > last_record_time &&
+				vgt->sched_info.sched_time -
+					vgt->stat.last_sched_time) {
+			seq_printf(m, " vGPU portion: %d HW utilization: %d\n",
+				(u32)((vgt->sched_info.sched_time -
+					vgt->stat.last_sched_time) * 100 /
+					(cur_record_time - last_record_time)),
+				(u32)((vgt->sched_info.busy_time -
+					vgt->stat.last_busy_time) * 100 /
+				(vgt->sched_info.sched_time -
+					vgt->stat.last_sched_time)));
+		} else {
+			seq_printf(m, "vGPU portion: 0 HW utilization: 0\n");
+		}
+
+		vgt->stat.last_sched_time = vgt->sched_info.sched_time;
+		vgt->stat.last_busy_time = vgt->sched_info.busy_time;
+	}
+
+	last_record_time = vgt_get_cycles();
+
+	vgt_unlock_dev(pdev, cpu);
+
+	seq_puts(m, "\n");
+	return 0;
+}
+
+static int vgt_qos_stat_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, vgt_qos_stat_show, inode->i_private);
+}
+
+static const struct file_operations vgt_qos_stat_fops = {
+	.open = vgt_qos_stat_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+
+
 /* initialize vGT debufs top directory */
 struct dentry *vgt_init_debugfs(struct pgt_device *pdev)
 {
@@ -1196,6 +1253,11 @@ struct dentry *vgt_init_debugfs(struct pgt_device *pdev)
 	if (!temp_d)
 		return NULL;
 
+	temp_d = debugfs_create_file("show_qos_stat", 0444, d_vgt_debug,
+		pdev, &vgt_qos_stat_fops);
+	if (!temp_d)
+		return NULL;
+
 	debugfs_create_u64_node("context_switch_cycles", 0440, d_vgt_debug,
 				&pdev->stat.context_switch_cost);
 	debugfs_create_u64_node("context_switch_num", 0440, d_vgt_debug,
@@ -1206,6 +1268,9 @@ struct dentry *vgt_init_debugfs(struct pgt_device *pdev)
 				&pdev->stat.ring_0_busy);
 	debugfs_create_u64_node("ring_0_idle", 0440, d_vgt_debug,
 				&pdev->stat.ring_0_idle);
+	debugfs_create_u64_node("mocs_restore_cnt", 0440, d_vgt_debug,
+				&pdev->stat.mocs_restore_cnt);
+
 
 	temp_d = debugfs_create_file("reginfo", 0444, d_vgt_debug,
 		pdev, &reginfo_fops);
@@ -1430,7 +1495,6 @@ void vgt_debugfs_symlink_module_param(void)
 	VGT_CREATE_SYMLINK_FOR_MODULE_PARAM(vgt_debug, runtime_dir_entry, debug);
 	VGT_CREATE_SYMLINK_FOR_MODULE_PARAM(tbs_period_ms, runtime_dir_entry, tbs_period_ms);
 	VGT_CREATE_SYMLINK_FOR_MODULE_PARAM(render_engine_reset, runtime_dir_entry, render_engine_reset);
-	VGT_CREATE_SYMLINK_FOR_MODULE_PARAM(propagate_monitor_to_guest, runtime_dir_entry, propagate_monitor_to_guest);
 	VGT_CREATE_SYMLINK_FOR_MODULE_PARAM(preallocated_shadow_pages, runtime_dir_entry, preallocated_shadow_pages);
 	VGT_CREATE_SYMLINK_FOR_MODULE_PARAM(preallocated_oos_pages, runtime_dir_entry, preallocated_oos_pages);
 	VGT_CREATE_SYMLINK_FOR_MODULE_PARAM(spt_out_of_sync, runtime_dir_entry, spt_out_of_sync);
@@ -1447,6 +1511,7 @@ void vgt_debugfs_symlink_module_param(void)
 	VGT_CREATE_SYMLINK_FOR_MODULE_PARAM(shadow_indirect_ctx_bb, runtime_dir_entry, shadow_indirect_ctx_bb);
 	VGT_CREATE_SYMLINK_FOR_MODULE_PARAM(vgt_cmd_audit, runtime_dir_entry, vgt_cmd_audit);
 	VGT_CREATE_SYMLINK_FOR_MODULE_PARAM(vgt_hold_forcewake, runtime_dir_entry, vgt_hold_forcewake);
+	VGT_CREATE_SYMLINK_FOR_MODULE_PARAM(logd_enable, runtime_dir_entry, logd_enable);
 }
 
 /* debugfs_remove_recursive has no return value, this fuction

@@ -5045,48 +5045,4 @@ bool kvmgt_write_protect(struct kvm *kvm, gfn_t gfn, bool add)
 	return add ? kvmgt_write_protect_add_gfn(kvm, gfn) :
 			kvmgt_write_protect_remove_gfn(kvm, gfn);
 }
-
-static unsigned long *kvmgt_gfn_to_rmap(struct kvm *kvm, gfn_t gfn, int level)
-{
-	struct kvm_memory_slot *slot;
-	unsigned long idx;
-
-	slot = gfn_to_memslot(kvm, gfn);
-	if (!slot)
-		return NULL;
-
-	idx = gfn_to_index(gfn, slot->base_gfn, level);
-
-	if (!slot->arch.rmap ||
-			!slot->arch.rmap[level - PT_PAGE_TABLE_LEVEL])
-		return NULL;
-
-	return &slot->arch.rmap[level - PT_PAGE_TABLE_LEVEL][idx];
-}
-
-pfn_t kvmgt_gfn_to_pfn_by_rmap(struct kvm *kvm, u64 gfn)
-{
-	unsigned long *rmapp = kvmgt_gfn_to_rmap(kvm, gfn, PT_PAGE_TABLE_LEVEL);
-	u64 *sptep;
-	struct rmap_iterator iter;
-	pfn_t pfn;
-	int i = 0;
-
-	if (!rmapp)
-		return KVM_PFN_ERR_FAULT;
-
-	for (sptep = rmap_get_first(*rmapp, &iter); sptep;) {
-		BUG_ON(!(*sptep & PT_PRESENT_MASK));
-		/* only direct mode supported */
-		BUG_ON(i++);
-
-		pfn = spte_to_pfn(*sptep);
-		sptep = rmap_get_next(&iter);
-	}
-
-	if (!i)
-		return KVM_PFN_ERR_FAULT;
-
-	return pfn;
-}
 #endif /* CONFIG_KVMGT */

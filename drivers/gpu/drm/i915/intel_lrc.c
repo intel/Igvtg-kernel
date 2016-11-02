@@ -1161,12 +1161,13 @@ static inline int gen8_emit_flush_coherentl3_wa(struct intel_engine_cs *ring,
 	uint32_t l3sqc4_flush = (0x40400000 | GEN8_LQSC_FLUSH_COHERENT_LINES);
 
 	/*
-	 * WaDisableLSQCROPERFforOCL:skl
+	 * WaDisableLSQCROPERFforOCL:skl,kbl
 	 * This WA is implemented in skl_init_clock_gating() but since
 	 * this batch updates GEN8_L3SQCREG4 with default value we need to
 	 * set this bit here to retain the WA during flush.
 	 */
-	if (IS_SKL_REVID(ring->dev, 0, SKL_REVID_E0))
+	if (IS_SKL_REVID(ring->dev, 0, SKL_REVID_E0) ||
+	    IS_KBL_REVID(ring->dev, 0, KBL_REVID_E0))
 		l3sqc4_flush |= GEN8_LQSC_RO_PERF_DIS;
 
 	wa_ctx_emit(batch, index, (MI_STORE_REGISTER_MEM_GEN8 |
@@ -1341,6 +1342,22 @@ static int gen9_init_indirectctx_bb(struct intel_engine_cs *ring,
 		return ret;
 	index = ret;
 
+	/* WaClearSlmSpaceAtContextSwitch:kbl */
+	/* Actual scratch location is at 128 bytes offset */
+	if (IS_KBL_REVID(ring->dev, 0, KBL_REVID_A0)) {
+		uint32_t scratch_addr
+			= ring->scratch.gtt_offset + 2*CACHELINE_BYTES;
+
+		wa_ctx_emit(batch, index, GFX_OP_PIPE_CONTROL(6));
+		wa_ctx_emit(batch, index, (PIPE_CONTROL_FLUSH_L3 |
+					   PIPE_CONTROL_GLOBAL_GTT_IVB |
+					   PIPE_CONTROL_CS_STALL |
+					   PIPE_CONTROL_QW_WRITE));
+		wa_ctx_emit(batch, index, scratch_addr);
+		wa_ctx_emit(batch, index, 0);
+		wa_ctx_emit(batch, index, 0);
+		wa_ctx_emit(batch, index, 0);
+	}
 	/* Pad to end of cacheline */
 	while (index % CACHELINE_DWORDS)
 		wa_ctx_emit(batch, index, MI_NOOP);
@@ -1714,9 +1731,10 @@ static int gen8_emit_flush_render(struct drm_i915_gem_request *request,
 	struct intel_ringbuffer *ringbuf = request->ringbuf;
 	struct intel_engine_cs *ring = ringbuf->ring;
 	u32 scratch_addr = ring->scratch.gtt_offset + 2 * CACHELINE_BYTES;
-	bool vf_flush_wa;
+	bool vf_flush_wa = false, dc_flush_wa = false;
 	u32 flags = 0;
 	int ret;
+	int len;
 
 	flags |= PIPE_CONTROL_CS_STALL;
 
@@ -1735,16 +1753,28 @@ static int gen8_emit_flush_render(struct drm_i915_gem_request *request,
 		flags |= PIPE_CONTROL_STATE_CACHE_INVALIDATE;
 		flags |= PIPE_CONTROL_QW_WRITE;
 		flags |= PIPE_CONTROL_GLOBAL_GTT_IVB;
+
+		/*
+		 * On GEN9: before VF_CACHE_INVALIDATE we need to emit a NULL
+		 * pipe control.
+		 */
+		if (IS_GEN9(request->i915))
+			vf_flush_wa = true;
+
+		/* WaForGAMHang:kbl */
+		if (IS_KBL_REVID(request->i915, 0, KBL_REVID_B0))
+			dc_flush_wa = true;
 	}
 
-	/*
-	 * On GEN9+ Before VF_CACHE_INVALIDATE we need to emit a NULL pipe
-	 * control.
-	 */
-	vf_flush_wa = INTEL_INFO(ring->dev)->gen >= 9 &&
-		      flags & PIPE_CONTROL_VF_CACHE_INVALIDATE;
+	len = 6;
 
-	ret = intel_logical_ring_begin(request, vf_flush_wa ? 12 : 6);
+	if (vf_flush_wa)
+		len += 6;
+
+	if (dc_flush_wa)
+		len += 12;
+
+	ret = intel_logical_ring_begin(request, len);
 	if (ret)
 		return ret;
 
@@ -1757,12 +1787,31 @@ static int gen8_emit_flush_render(struct drm_i915_gem_request *request,
 		intel_logical_ring_emit(ringbuf, 0);
 	}
 
+	if (dc_flush_wa) {
+		intel_logical_ring_emit(ringbuf, GFX_OP_PIPE_CONTROL(6));
+		intel_logical_ring_emit(ringbuf, PIPE_CONTROL_DC_FLUSH_ENABLE);
+		intel_logical_ring_emit(ringbuf, 0);
+		intel_logical_ring_emit(ringbuf, 0);
+		intel_logical_ring_emit(ringbuf, 0);
+		intel_logical_ring_emit(ringbuf, 0);
+	}
+
 	intel_logical_ring_emit(ringbuf, GFX_OP_PIPE_CONTROL(6));
 	intel_logical_ring_emit(ringbuf, flags);
 	intel_logical_ring_emit(ringbuf, scratch_addr);
 	intel_logical_ring_emit(ringbuf, 0);
 	intel_logical_ring_emit(ringbuf, 0);
 	intel_logical_ring_emit(ringbuf, 0);
+
+	if (dc_flush_wa) {
+		intel_logical_ring_emit(ringbuf, GFX_OP_PIPE_CONTROL(6));
+		intel_logical_ring_emit(ringbuf, PIPE_CONTROL_CS_STALL);
+		intel_logical_ring_emit(ringbuf, 0);
+		intel_logical_ring_emit(ringbuf, 0);
+		intel_logical_ring_emit(ringbuf, 0);
+		intel_logical_ring_emit(ringbuf, 0);
+	}
+
 	intel_logical_ring_advance(ringbuf);
 
 	return 0;

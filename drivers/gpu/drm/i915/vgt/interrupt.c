@@ -553,7 +553,8 @@ bool vgt_reg_master_irq_handler(struct vgt_device *vgt,
 		__this_cpu_read(in_vgt) != 1) {
 		vgt_err("i915 virq happens in nested vgt context(%d)!!!\n",
 			__this_cpu_read(in_vgt));
-		ASSERT(0);
+		if (!enable_reset)
+			ASSERT(0);
 	}
 
 	/*
@@ -603,7 +604,8 @@ bool vgt_reg_ier_handler(struct vgt_device *vgt,
 		__this_cpu_read(in_vgt) != 1) {
 		vgt_err("i915 virq happens in nested vgt context(%d)!!!\n",
 			__this_cpu_read(in_vgt));
-		ASSERT(0);
+		if (!enable_reset)
+			ASSERT(0);
 	}
 
 	/* figure out newly enabled/disable bits */
@@ -1300,7 +1302,7 @@ static void vgt_handle_crt_hotplug_phys(struct vgt_irq_host_state *hstate,
 		vgt_set_uevent(vgt_dom0, CRT_HOTPLUG_OUT);
 	}
 
-	if (propagate_monitor_to_guest)
+	if (preallocated_monitor_to_guest == 0)
 		vgt_set_uevent(vgt_dom0, VGT_DETECT_PORT_E);
 
 	/* send out udev events when handling physical interruts */
@@ -1357,7 +1359,7 @@ static void vgt_handle_port_hotplug_phys(struct vgt_irq_host_state *hstate,
 		vgt_set_uevent(vgt_dom0, hotplug_event + 1);
 	}
 
-	if (propagate_monitor_to_guest)
+	if (preallocated_monitor_to_guest == 0)
 		vgt_set_uevent(vgt_dom0, detect_event);
 
 	vgt_set_event_val(hstate, event, hotplug_ctrl);
@@ -1677,7 +1679,7 @@ static void vgt_gen8_init_irq(
 	SET_BIT_INFO(hstate, 4, VCS_MI_FLUSH_DW, IRQ_INFO_GT1);
 	SET_BIT_INFO(hstate, 8, VCS_AS_CONTEXT_SWITCH, IRQ_INFO_GT1);
 
-	if (IS_BDWGT3(pdev) || IS_SKLGT3(pdev) || IS_SKLGT4(pdev)) {
+	if (IS_BDWGT3(pdev) || IS_SKLGT3(pdev) || IS_SKLGT4(pdev) || IS_KBLGT3(pdev) || IS_KBLGT4(pdev)) {
 		SET_BIT_INFO(hstate, 16, VCS2_MI_USER_INTERRUPT, IRQ_INFO_GT1);
 		SET_BIT_INFO(hstate, 20, VCS2_MI_FLUSH_DW, IRQ_INFO_GT1);
 		SET_BIT_INFO(hstate, 24, VCS2_AS_CONTEXT_SWITCH, IRQ_INFO_GT1);
@@ -1732,7 +1734,7 @@ static void vgt_gen8_init_irq(
 		SET_BIT_INFO(hstate, 5, SPRITE_C_FLIP_DONE, IRQ_INFO_DE_PIPE_C);
 	}
 
-	if (IS_SKL(pdev)) {
+	if (IS_SKL(pdev) || IS_KBL(pdev)) {
 		SET_BIT_INFO(hstate, 25, AUX_CHANNEL_B, IRQ_INFO_DE_PORT);
 		SET_BIT_INFO(hstate, 26, AUX_CHANNEL_C, IRQ_INFO_DE_PORT);
 		SET_BIT_INFO(hstate, 27, AUX_CHANNEL_D, IRQ_INFO_DE_PORT);
@@ -1878,6 +1880,7 @@ inline bool vgt_need_emulated_irq(struct vgt_device *vgt, enum pipe pipe)
 static inline void vgt_emulate_vblank(struct vgt_device *vgt,
 			enum pipe pipe)
 {
+	enum pipe edp_pipe = I915_MAX_PIPES;
 	enum vgt_event_type vblank;
 	switch (pipe) {
 	case PIPE_A:
@@ -1890,8 +1893,11 @@ static inline void vgt_emulate_vblank(struct vgt_device *vgt,
 		ASSERT(0);
 	}
 
+	if (__vreg(vgt, _REG_PIPE_EDP_CONF) & _REGBIT_PIPE_ENABLE)
+		edp_pipe = get_edp_input(__vreg(vgt, TRANS_DDI_FUNC_CTL_EDP));
+
 	if ((__vreg(vgt, VGT_PIPECONF(pipe)) & _REGBIT_PIPE_ENABLE) ||
-			(__vreg(vgt, _REG_PIPE_EDP_CONF) & _REGBIT_PIPE_ENABLE)) {
+			edp_pipe == pipe) {
 		__vreg(vgt, VGT_PIPE_FRMCOUNT(pipe))++;
 		vgt_trigger_virtual_event(vgt, vblank);
 	}
@@ -2084,7 +2090,7 @@ static void vgt_init_events(
 	SET_POLICY_ALL(hstate,VECS_MI_FLUSH_DW);
 	SET_POLICY_ALL(hstate,VECS_AS_CONTEXT_SWITCH);
 
-	if (IS_BDW(hstate->pdev) || IS_SKL(hstate->pdev)) {
+	if (IS_BDW(hstate->pdev) || IS_SKL(hstate->pdev) || IS_KBL(hstate->pdev)) {
 		SET_POLICY_RDR(hstate, RCS_MI_USER_INTERRUPT);
 		SET_POLICY_RDR(hstate, VCS_MI_USER_INTERRUPT);
 		SET_POLICY_RDR(hstate, BCS_MI_USER_INTERRUPT);
@@ -2137,7 +2143,7 @@ int vgt_irq_init(struct pgt_device *pdev)
 	} else if (IS_IVB(pdev) || IS_HSW(pdev)) {
 		hstate->ops = &vgt_base_irq_ops;
 		hstate->irq_map = base_irq_map;
-	} else if (IS_BDW(pdev) || IS_SKL(pdev)) {
+	} else if (IS_BDW(pdev) || IS_SKL(pdev) || IS_KBL(pdev)) {
 		hstate->ops = &vgt_gen8_irq_ops;
 		hstate->irq_map = gen8_irq_map;
 	} else {

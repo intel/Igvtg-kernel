@@ -24,6 +24,7 @@
  */
 
 #include "vgt.h"
+#include "trace.h"
 
 /* Lets move context scheduler specific parameters here */
 bool timer_based_qos = true;
@@ -67,24 +68,55 @@ static inline bool phys_head_catch_tail(struct pgt_device *pdev)
 	return true;
 }
 
-
-/* FIXME: Since it is part of "timer based scheduler",
- * move this from vgt_context.c here and renamed from
- * next_vgt() to tbs_next_vgt()
+/* Calc the sched_time during ctx switch, subtract it
+ * from the time slice allocated correspondingly.
  */
-static struct vgt_device *tbs_next_vgt(
-	struct list_head *head, struct vgt_device *vgt)
+void vgt_timeslice_stat(struct vgt_device *prev_vgt)
 {
-	struct list_head *next = &vgt->list;
+	int64_t delta;
+
+	delta = prev_vgt->stat.schedule_out_time -
+		prev_vgt->stat.schedule_in_time;
+
+	prev_vgt->sched_info.sched_time += delta;
+
+	prev_vgt->sched_info.time_slice -= delta / cpu_khz;
+
+	trace_qos_ts_used(prev_vgt->vm_id, delta / cpu_khz,
+		prev_vgt->sched_info.time_slice);
+}
+
+/* This function executed every 100ms, to alloc time slice
+ * for next 100ms.
+ */
+static void vgt_timeslice_balance(struct pgt_device *pdev)
+{
+	struct vgt_device *vgt;
+	static u64 stage_check;
+	int stage = stage_check++ % 10;
+
+	list_for_each_entry(vgt, &pdev->rendering_runq_head, list) {
+		int max_timeslice = VGT_TS_BALANCE_PERIOD * vgt_cap(vgt) / 100;
+		/* The time slice accumulation will reset at every one second */
+		if (stage == 0) {
+			vgt->sched_info.time_slice = max_timeslice;
+		} else {
+			/* timeslice for next 100ms should add the left/debt
+			 * slice of previous stages.
+			 */
+			vgt->sched_info.time_slice += max_timeslice;
+		}
+		trace_qos_ts_alloc(vgt->vm_id, stage,
+			vgt->sched_info.time_slice);
+	}
+}
+
+static struct vgt_device *vgt_pickup_next(struct list_head *head,
+	struct vgt_device *cur_vgt)
+{
 	struct vgt_device *next_vgt = NULL;
-	struct pgt_device *pdev;
-
-	if (vgt->force_removal)
-		return vgt_dom0;
-
-	pdev = vgt->pdev;
-	if (ctx_switch_requested(pdev))
-		return pdev->next_sched_vgt;
+	struct pgt_device *pdev = cur_vgt->pdev;
+	struct list_head *next = &cur_vgt->list;
 
 	do {
 		next = next->next;
@@ -93,14 +125,86 @@ static struct vgt_device *tbs_next_vgt(
 			next = head->next;
 		next_vgt = list_entry(next, struct vgt_device, list);
 
-		if (!vgt_vrings_empty(next_vgt) || pdev->dummy_vm_switch) {
+		if (pdev->dummy_vm_switch) {
 			pdev->dummy_vm_switch = false;
 			break;
 		}
 
-	} while (next_vgt != vgt);
+		if (!vgt_vrings_empty(next_vgt)) {
+			/* no time slice check if the guest which has no cap set */
+			if (vgt_cap(next_vgt) == 0)
+				break;
+			/* allowed to schedule if has time slice left */
+			else if (vgt_time_slice(next_vgt) > 0)
+				break;
+		}
+	} while (next_vgt != cur_vgt);
+
+	trace_qos_pick(cur_vgt->vm_id, next_vgt->vm_id,
+		vgt_time_slice(next_vgt));
+	/* dom0 become the render owner if next guests
+	 * are all idle and cur_vgt has cap set.
+	 */
+	if (vgt_cap(cur_vgt) && next_vgt == cur_vgt)
+		return vgt_dom0;
 
 	return next_vgt;
+}
+
+/* Find out the guest which have not been scheduled near a max
+ * threshold, then execute it immediately to avoid guest TDR.
+ * TODO: change to more efficient sorted list.
+ */
+#define GUEST_TDR_THRES_MS 1500
+static struct vgt_device *vgt_longest_unsched(struct list_head *head)
+{
+	struct vgt_device *vgt = NULL;
+	cycles_t cur_cycles = vgt_get_cycles();
+
+	list_for_each_entry(vgt, head, list) {
+		if ((cur_cycles - vgt->stat.schedule_out_time) / cpu_khz >
+			GUEST_TDR_THRES_MS) {
+			if (vgt_vrings_empty(vgt) ||
+					is_current_render_owner(vgt))
+				continue;
+			else if ((cur_cycles - vgt->sched_info.last_ctx_submit_time) / cpu_khz <
+				GUEST_TDR_THRES_MS)
+				continue;
+			vgt_warn("LRU guest detect: VM-%d cur: %lld, "
+						"sched_out: %lld, "
+						"last_ctx: %lld\n",
+				vgt->vm_id, cur_cycles / cpu_khz,
+				vgt->stat.schedule_out_time / cpu_khz,
+				vgt->sched_info.last_ctx_submit_time / cpu_khz);
+			return vgt;
+		}
+	}
+
+	return NULL;
+}
+
+/* FIXME: Since it is part of "timer based scheduler",
+ * move this from vgt_context.c here and renamed from
+ * next_vgt() to tbs_next_vgt()
+ */
+static struct vgt_device *tbs_next_vgt(
+	struct list_head *head, struct vgt_device *cur_vgt)
+{
+	struct vgt_device *next_vgt = NULL;
+	struct pgt_device *pdev;
+
+	if (cur_vgt->force_removal)
+		return vgt_dom0;
+
+	pdev = cur_vgt->pdev;
+	if (ctx_switch_requested(pdev))
+		return pdev->next_sched_vgt;
+
+	next_vgt = vgt_longest_unsched(head);
+	if (next_vgt)
+		return next_vgt;
+
+	return vgt_pickup_next(head, cur_vgt);
 }
 
 /* safe to not use vgt_enter/vgt_exit, otherwise easily lead to deadlock */
@@ -796,10 +900,14 @@ void vgt_sched_update_next(struct vgt_device *vgt)
 
 void vgt_schedule(struct pgt_device *pdev)
 {
+	static u64 timer_check;
 	ASSERT(spin_is_locked(&pdev->lock));
 
 	if (vgt_nr_in_runq(pdev) < 2)
 		return;
+
+	if (!(timer_check++ % VGT_TS_BALANCE_PERIOD))
+		vgt_timeslice_balance(pdev);
 
 	pdev->next_sched_vgt = tbs_next_vgt(&pdev->rendering_runq_head,
 			current_render_owner(pdev));
@@ -973,3 +1081,54 @@ bool vgt_do_render_sched(struct pgt_device *pdev)
 	vgt_unlock_dev(pdev, cpu);
 	return rc;
 }
+
+bool vgt_render_remove_from_schedule(struct vgt_device *vgt)
+{
+	struct pgt_device *pdev = vgt->pdev;
+	int cpu;
+	int ring;
+
+	vgt_lock_dev(pdev, cpu);
+
+	for (ring = RING_BUFFER_RCS; ring < vgt->pdev->max_engines; ring++)
+		vgt_disable_ring(vgt, ring);
+
+	vgt_unlock_dev(pdev, cpu);
+
+	/* wait 200ms for vGPU scheduling to complete*/
+	if (wait_for((current_render_owner(pdev) != vgt), 200)) {
+		vgt_err("vGT-%d failed to remove from render queue\n",
+				vgt->vgt_id);
+		goto FAIL;
+	}
+
+	return true;
+FAIL:
+	/* lets add back to render scheduling again */
+	vgt_lock_dev(pdev, cpu);
+	for (ring = RING_BUFFER_RCS; ring < vgt->pdev->max_engines; ring++)
+		vgt_enable_ring(vgt, ring);
+
+	vgt_unlock_dev(pdev, cpu);
+	return false;
+}
+
+bool vgt_render_add_to_schedule(struct vgt_device *vgt)
+{
+	struct pgt_device *pdev = vgt->pdev;
+	int cpu;
+	int ring;
+
+	vgt_lock_dev(pdev, cpu);
+	if (current_render_owner(pdev) == vgt) {
+		vgt_unlock_dev(pdev, cpu);
+		return true;
+	}
+
+	for (ring = RING_BUFFER_RCS; ring < vgt->pdev->max_engines; ring++)
+		vgt_enable_ring(vgt, ring);
+
+	vgt_unlock_dev(pdev, cpu);
+	return true;
+}
+

@@ -99,9 +99,20 @@ bool render_engine_reset = true;
 module_param_named(render_engine_reset, render_engine_reset, bool, 0600);
 MODULE_PARM_DESC(render_engine_reset, "Reset rendering engines before loading another VM's context");
 
-bool propagate_monitor_to_guest = true;
-module_param_named(propagate_monitor_to_guest, propagate_monitor_to_guest, bool, 0600);
-MODULE_PARM_DESC(propagate_monitor_to_guest, "Propagate monitor information to guest by XenGT, other than dom0 services to do so");
+int mocs_saverestore_mode = 1;
+module_param_named(mocs_saverestore_mode, mocs_saverestore_mode, int, 0600);
+MODULE_PARM_DESC(mocs_saverestore_mode, "MOCS save restore mode in context switch (default: 1 lite-saverestore, 0 full)");
+
+/* possible value of preallocated_monitor_to_guest:
+ * 0: (default)use the information of monitor that connected on host
+ * 1: emulated monitor number for each guest VM.
+ * Other number of emulated monitor is NOT supported yet.
+ */
+int preallocated_monitor_to_guest = -1;
+module_param_named(preallocated_monitor_to_guest,
+	preallocated_monitor_to_guest, int, 0600);
+MODULE_PARM_DESC(preallocated_monitor_to_guest,
+	"pre-allocate monitor to guest, or copy monitor information from host");
 
 bool irq_based_ctx_switch = true;
 module_param_named(irq_based_ctx_switch, irq_based_ctx_switch, bool, 0400);
@@ -118,6 +129,10 @@ MODULE_PARM_DESC(preallocated_oos_pages, "Amount of pre-allocated oos pages");
 bool spt_out_of_sync = true;
 module_param_named(spt_out_of_sync, spt_out_of_sync, bool, 0600);
 MODULE_PARM_DESC(spt_out_of_sync, "Enable SPT out of sync");
+
+bool logd_enable = true;
+module_param_named(logd_enable, logd_enable, bool, 0600);
+MODULE_PARM_DESC(logd_enable, "Enable vGPU log dirty pages");
 
 /*
  * FIXME: now video ring switch has weird issue. The cmd
@@ -589,6 +604,12 @@ static bool vgt_set_device_type(struct pgt_device *pdev)
 		return true;
 	}
 
+	if (_is_kabylake(pdev->pdev->device)) {
+		pdev->gen_dev_type = IGD_KBL;
+		vgt_info("Detected Kabylake\n");
+		return true;
+	}
+
 	vgt_err("Unknown chip 0x%x\n", pdev->pdev->device);
 	return false;
 }
@@ -616,14 +637,25 @@ static void vgt_kernel_param_sanity_check(struct pgt_device *pdev)
 		if (preallocated_oos_pages == -1)
 			preallocated_oos_pages = 2048;
 
-	} else if (IS_BDW(pdev) || IS_SKL(pdev)) {
+	} else if (IS_BDW(pdev) || IS_SKL(pdev) || IS_KBL(pdev)) {
 		if (preallocated_shadow_pages == -1)
 			preallocated_shadow_pages = 8192;
 		if (preallocated_oos_pages == -1)
 			preallocated_oos_pages = 4096;
 	}
-}
 
+	/*
+	 * do not use the emulated monitor as default.
+	 *
+	 * As multi-monitor support is NOT fully supported in composite
+	 * display mode, the maximum number of emulated monitor is set to 1
+	 * at this moment.
+	 */
+	if (preallocated_monitor_to_guest <= -1)
+		preallocated_monitor_to_guest = 0;
+	else if	(preallocated_monitor_to_guest > 1)
+		preallocated_monitor_to_guest = 1;
+}
 
 static bool vgt_initialize_device_info(struct pgt_device *pdev)
 {
@@ -634,14 +666,14 @@ static bool vgt_initialize_device_info(struct pgt_device *pdev)
 
 	vgt_kernel_param_sanity_check(pdev);
 
-	if (!IS_HSW(pdev) && !IS_BDW(pdev) && !IS_SKL(pdev)) {
+	if (!IS_HSW(pdev) && !IS_BDW(pdev) && !IS_SKL(pdev) && !IS_KBL(pdev)) {
 		vgt_err("Unsupported gen_dev_type(%s)!\n",
 			IS_IVB(pdev) ?
 			"IVB" : "SNB(or unknown GEN types)");
 		return false;
 	}
 
-	if (IS_SKL(pdev) && !vgt_preliminary_hw_support) {
+	if ((IS_SKL(pdev) || IS_KBL(pdev)) && !vgt_preliminary_hw_support) {
 		vgt_err("VGT haven't fully supported preliminary platform: skylake.\n");
 		return false;
 	}
@@ -662,7 +694,7 @@ static bool vgt_initialize_device_info(struct pgt_device *pdev)
 		info->gmadr_bytes_in_cmd = 4;
 		info->max_surface_size = 36 * SIZE_1MB;
 		info->max_support_vms = 4;
-	} else if (IS_BDW(pdev) || IS_SKL(pdev)) {
+	} else if (IS_BDW(pdev) || IS_SKL(pdev) || IS_KBL(pdev)) {
 		int gen = IS_BDW(pdev) ? 8 : 9;
 
 		info->gen = MKGEN(gen, 0, ((pdev->pdev->device >> 4) & 0xf) + 1);
@@ -788,7 +820,7 @@ static bool vgt_initialize_platform(struct pgt_device *pdev)
 		/*
 		 * Add GT3 VCS2 ring for BDW and SKL GT3/4
 		 */
-		if (IS_BDWGT3(pdev) || IS_SKLGT3(pdev) || IS_SKLGT4(pdev)) {
+		if (IS_BDWGT3(pdev) || IS_SKLGT3(pdev) || IS_SKLGT4(pdev) || IS_KBLGT3(pdev) || IS_KBLGT4(pdev)) {
 			pdev->max_engines = 5;
 			pdev->ring_mmio_base[RING_BUFFER_VCS2] = _REG_VCS2_TAIL;
 			pdev->ring_mi_mode[RING_BUFFER_VCS2] = _REG_VCS2_MI_MODE;
@@ -796,7 +828,7 @@ static bool vgt_initialize_platform(struct pgt_device *pdev)
 			pdev->ring_xxx_bit[RING_BUFFER_VCS2] = 0;
 		}
 
-		if (IS_SKL(pdev)) {
+		if (IS_SKL(pdev) || IS_KBL(pdev)) {
 			vgt_get_memory_latency(pdev);
 			VGT_MMIO_WRITE(pdev, 0x4dfc, 0x1);
 		}
@@ -993,6 +1025,8 @@ static int vgt_initialize(struct pci_dev *dev)
 	vp.gm_sz = dom0_low_gm_sz + dom0_high_gm_sz;
 	vp.fence_sz = dom0_fence_sz;
 	vp.vgt_primary = 1; /* this isn't actually used for dom0 */
+	/* there is no upper cap for dom0 */
+	vp.cap = 0;
 	if (create_vgt_instance(pdev, &vgt_dom0, vp) < 0)
 		goto err;
 
@@ -1151,6 +1185,7 @@ int vgt_resume(struct pci_dev *pdev)
 	 */
 	state_sreg_init(vgt_dom0);
 	state_vreg_init(vgt_dom0);
+	state_dpy_reg_init(vgt_dom0);
 
 	/* TODO, GMBUS inuse bit? */
 
@@ -1224,7 +1259,8 @@ static void do_device_reset(struct pgt_device *pdev)
 	if (test_bit(WAIT_RESET, &vgt_dom0->reset_flags)) {
 		vgt_err("DOM0 GPU reset didn't happen?.\n");
 		vgt_err("Maybe you set i915.reset=0 in kernel command line? Panic the system.\n");
-		ASSERT(0);
+		if (!enable_reset)
+			ASSERT(0);
 	}
 
 	if (IS_PREBDW(pdev)) {

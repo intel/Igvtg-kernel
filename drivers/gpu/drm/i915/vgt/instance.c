@@ -116,9 +116,10 @@ int create_vgt_instance(struct pgt_device *pdev, struct vgt_device **ptr_vgt, vg
 	int rc = -ENOMEM;
 	int i;
 
-	vgt_info("vm_id=%d, low_gm_sz=%dMB, high_gm_sz=%dMB, fence_sz=%d, vgt_primary=%d\n",
-		vp.vm_id, vp.aperture_sz, vp.gm_sz-vp.aperture_sz, vp.fence_sz, vp.vgt_primary);
-
+	vgt_info("vm_id=%d, low_gm_sz=%dMB, high_gm_sz=%dMB, fence_sz=%d,"
+					"vgt_primary=%d, vgt_cap=%d\n",
+		vp.vm_id, vp.aperture_sz, vp.gm_sz-vp.aperture_sz, vp.fence_sz,
+					vp.vgt_primary, vp.cap);
 	vgt = vzalloc(sizeof(*vgt));
 	if (vgt == NULL) {
 		printk("Insufficient memory for vgt_device in %s\n", __FUNCTION__);
@@ -177,8 +178,8 @@ int create_vgt_instance(struct pgt_device *pdev, struct vgt_device **ptr_vgt, vg
 
 	/* Set initial configuration space and MMIO space registers. */
 	cfg_space = &vgt->state.cfg_space[0];
+
 	memcpy (cfg_space, pdev->initial_cfg_space, VGT_CFG_SPACE_SZ);
-	cfg_space[VGT_REG_CFG_SPACE_MSAC] = vgt->state.bar_size[1];
 
 	/* Show guest that there isn't any stolen memory.*/
 	gmch_ctl = (u16 *)(cfg_space + _REG_GMCH_CONTRL);
@@ -203,7 +204,7 @@ int create_vgt_instance(struct pgt_device *pdev, struct vgt_device **ptr_vgt, vg
 		"va(0x%llx)\n",
 		vgt_aperture_base(vgt),
 		vgt_aperture_end(vgt),
-		vgt_guest_aperture_base(vgt),
+		(uint64_t)vgt_guest_aperture_base(vgt),
 		vgt_guest_aperture_end(vgt),
 		(uint64_t)vgt->aperture_base_va);
 
@@ -232,6 +233,7 @@ int create_vgt_instance(struct pgt_device *pdev, struct vgt_device **ptr_vgt, vg
 
 	state_sreg_init (vgt);
 	state_vreg_init(vgt);
+	state_dpy_reg_init(vgt);
 
 	/* setup the ballooning information */
 	if (vgt->ballooning) {
@@ -251,8 +253,8 @@ int create_vgt_instance(struct pgt_device *pdev, struct vgt_device **ptr_vgt, vg
 			"   hidden_gm_base=0x%llx, size=0x%llx\n"
 			"   fence_base=%d, num=%d\n",
 			vgt->vm_id,
-			vgt_visible_gm_base(vgt), vgt_aperture_sz(vgt),
-			vgt_hidden_gm_base(vgt), vgt_hidden_gm_sz(vgt),
+			vgt_guest_visible_gm_base(vgt), vgt_aperture_sz(vgt),
+			vgt_guest_hidden_gm_base(vgt), vgt_hidden_gm_sz(vgt),
 			vgt->fence_base, vgt->fence_sz);
 
 		ASSERT(sizeof(struct vgt_if) == VGT_PVINFO_SIZE);
@@ -281,6 +283,8 @@ int create_vgt_instance(struct pgt_device *pdev, struct vgt_device **ptr_vgt, vg
 		/* HVM specific init */
 		if ((rc = hypervisor_hvm_init(vgt)) < 0)
 			goto err;
+		/* must be after hvm_init */
+		vgt_logd_init(vgt);
 	}
 
 	if (vgt->vm_id) {
@@ -321,7 +325,15 @@ int create_vgt_instance(struct pgt_device *pdev, struct vgt_device **ptr_vgt, vg
 
 	vgt_init_i2c_edid(vgt);
 
+	if (preallocated_monitor_to_guest && !is_current_display_owner(vgt)) {
+		if (!vgt_init_default_monitor(vgt))
+			goto err;
+	}
+
 	*ptr_vgt = vgt;
+
+	vgt_cap(vgt) = vp.cap;
+	vgt_info("VM-%d set cap %d\n", vgt->vm_id, vgt_cap(vgt));
 
 	/* initialize context scheduler infor */
 	vgt_init_sched_info(vgt);
@@ -358,6 +370,8 @@ void vgt_release_instance(struct vgt_device *vgt)
 	int cpu;
 
 	printk("prepare to destroy vgt (%d)\n", vgt->vgt_id);
+
+	vgt_migration_release_snapshot(vgt);
 
 	vgt_hvm_set_trap_area(vgt, 0);
 	/* destroy vgt_mmio_device */
@@ -398,6 +412,7 @@ void vgt_release_instance(struct vgt_device *vgt)
 	}
 
 	vgt_unlock_dev(pdev, cpu);
+
 	if (vgt->force_removal)
 		/* wait for removal completion */
 		wait_event_killable(pdev->destroy_wq, !vgt->force_removal);
@@ -422,8 +437,7 @@ void vgt_release_instance(struct vgt_device *vgt)
 		}
 	}
 
-	if (vgt->vm_id)
-		hypervisor_hvm_exit(vgt);
+	vgt_logd_finit(vgt);
 
 	vgt_lock_dev(pdev, cpu);
 
@@ -434,6 +448,9 @@ void vgt_release_instance(struct vgt_device *vgt)
 	list_del(&vgt->list);
 
 	vgt_unlock_dev(pdev, cpu);
+
+	if (vgt->vm_id)
+		hypervisor_hvm_exit(vgt);
 
 	for (i = 0; i < I915_MAX_PORTS; i++) {
 		if (vgt->ports[i].edid) {

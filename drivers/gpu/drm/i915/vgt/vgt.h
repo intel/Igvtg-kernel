@@ -58,6 +58,7 @@ struct vgt_device;
 #include "sched.h"
 #include "execlists.h"
 #include "fb_decoder.h"
+#include "migration.h"
 
 extern struct vgt_device *vgt_dom0;
 extern struct pgt_device *perf_pgt;
@@ -91,6 +92,7 @@ extern int dom0_fence_sz;
 extern int bypass_scan_mask;
 extern bool bypass_dom0_addr_check;
 extern bool render_engine_reset;
+extern int mocs_saverestore_mode;
 extern bool enable_panel_fitting;
 extern bool enable_reset;
 extern int reset_count_threshold;
@@ -102,7 +104,7 @@ extern int shadow_cmd_buffer;
 extern int shadow_ctx_check;
 extern int shadow_indirect_ctx_bb;
 extern int vgt_cmd_audit;
-extern bool propagate_monitor_to_guest;
+extern int preallocated_monitor_to_guest;
 extern bool irq_based_ctx_switch;
 extern int preallocated_shadow_pages;
 extern int preallocated_oos_pages;
@@ -112,6 +114,7 @@ extern int tbs_period_ms;
 extern bool opregion_present;
 extern int preemption_policy;
 extern bool vblank_broadcast;
+extern bool logd_enable;
 
 #define VGT_PREEMPTION_DISABLED   (1<<0)
 #define VGT_LITERESTORE_DISABLED  (1<<1)
@@ -128,6 +131,7 @@ extern bool vblank_broadcast;
 #define VGT_DBG_EDID		(1<<6)
 #define VGT_DBG_EXECLIST	(1<<7)
 #define VGT_DBG_RESET		(1<<8)
+#define VGT_DBG_MIGRATION (1<<9)
 #define VGT_DBG_ALL		(0xffff)
 
 #define SIZE_1KB		(1024UL)
@@ -167,6 +171,12 @@ extern bool vblank_broadcast;
 #define VGT_MMIO_SPACE_SZ	(2*SIZE_1MB)
 #define VGT_CFG_SPACE_SZ	256
 #define VGT_BAR_NUM		4
+
+enum mocs_saverestore_mode {
+	MOCS_SAVE_RESTORE_FULL = 0,
+	MOCS_SAVE_RESTORE_LITE
+};
+
 typedef struct {
 	uint64_t	mmio_base_gpa;	/* base guest physical address of the MMIO registers */
 	vgt_reg_t	*vReg;		/* guest view of the register state */
@@ -228,6 +238,9 @@ extern int vgt_hvm_opregion_init(struct vgt_device *vgt, uint32_t gpa);
 extern void vgt_hvm_info_deinit(struct vgt_device *vgt);
 extern bool vgt_prepare_vbios_general_definition(struct vgt_device *vgt);
 extern void vgt_check_pending_context_switch(struct vgt_device *vgt);
+
+bool vgt_render_remove_from_schedule(struct vgt_device *vgt);
+bool vgt_render_add_to_schedule(struct vgt_device *vgt);
 
 struct vgt_irq_virt_state;
 
@@ -333,6 +346,13 @@ struct vgt_device {
 	unsigned long *reset_count_start_time; /*record each reset time*/
 	int reset_count;
 	int reset_count_head; /*sliding window methods*/
+
+	/* migration support */
+	vgt_image_header_t image_header;
+	vgt_migration_obj_t migration_obj;
+
+	/* log dirty pages for vGPU */
+	vgt_logd_t logd;
 };
 
 typedef u32 reg_info_t;
@@ -549,6 +569,8 @@ struct pgt_device {
 #define reg_get_owner(pdev, reg)	(pdev->reg_info[REG_INDEX(reg)] & VGT_REG_OWNER)
 #define reg_is_render(pdev, reg)	(reg_get_owner(pdev, reg) == VGT_OT_RENDER)
 #define reg_is_config(pdev, reg)	(reg_get_owner(pdev, reg) == VGT_OT_CONFIG)
+#define reg_is_display(pdev, reg)	\
+	(reg_get_owner(pdev, reg) == VGT_OT_DISPLAY)
 #define reg_invalid(pdev, reg)		(!pdev->reg_info[REG_INDEX(reg)])
 #define reg_aux_index(pdev, reg)	\
 	((pdev->reg_info[REG_INDEX(reg)] & VGT_REG_INDEX_MASK) >> VGT_REG_INDEX_SHIFT)
@@ -760,42 +782,47 @@ static inline bool reg_hw_access(struct vgt_device *vgt, unsigned int reg)
 #define IGD_HSW		3
 #define IGD_BDW		4
 #define IGD_SKL		5
-#define IGD_MAX		IGD_SKL
+#define IGD_KBL		6
+#define IGD_MAX		IGD_KBL
 
 #define IS_SNB(pdev)	((pdev)->gen_dev_type == IGD_SNB)
 #define IS_IVB(pdev)	((pdev)->gen_dev_type == IGD_IVB)
 #define IS_HSW(pdev)	((pdev)->gen_dev_type == IGD_HSW)
 #define IS_BDW(pdev)	((pdev)->gen_dev_type == IGD_BDW)
 #define IS_SKL(pdev)	((pdev)->gen_dev_type == IGD_SKL)
+#define IS_KBL(pdev)	((pdev)->gen_dev_type == IGD_KBL)
 
 #define IS_PREBDW(pdev) (IS_SNB(pdev) || IS_IVB(pdev) || IS_HSW(pdev))
-#define IS_BDWPLUS(pdev) (IS_BDW(pdev) || IS_SKL(pdev))
+#define IS_BDWPLUS(pdev) (IS_BDW(pdev) || IS_SKL(pdev) || IS_KBL(pdev))
 #define IS_PRESKL(pdev) (IS_BDW(pdev) || IS_HSW(pdev) || IS_IVB(pdev) || IS_SNB(pdev))
-#define IS_SKLPLUS(pdev) (IS_SKL(pdev))
+#define IS_SKLPLUS(pdev) (IS_SKL(pdev) || IS_KBL(pdev))
 #define IS_BDWGT3(pdev) (IS_BDW(pdev) && (GEN_REV(pdev->device_info.gen) == 3))
 #define IS_SKLGT3(pdev) (IS_SKL(pdev) && (GEN_REV(pdev->device_info.gen) == 3))
 #define IS_SKLGT4(pdev) (IS_SKL(pdev) && (GEN_REV(pdev->device_info.gen) == 4))
+#define IS_KBLGT3(pdev) (IS_KBL(pdev) && (GEN_REV(pdev->device_info.gen) == 3))
+#define IS_KBLGT4(pdev) (IS_KBL(pdev) && (GEN_REV(pdev->device_info.gen) == 4))
 
 #define D_SNB	(1 << 0)
 #define D_IVB	(1 << 1)
 #define D_HSW	(1 << 2)
 #define D_BDW	(1 << 3)
 #define D_SKL	(1 << 4)
+#define D_KBL	(1 << 5)
 
-#define D_GEN9PLUS	(D_SKL)
-#define D_GEN8PLUS	(D_BDW | D_SKL)
-#define D_GEN75PLUS	(D_HSW | D_BDW | D_SKL)
-#define D_GEN7PLUS	(D_IVB | D_HSW | D_BDW | D_SKL)
+#define D_GEN9PLUS	(D_SKL | D_KBL)
+#define D_GEN8PLUS	(D_BDW | D_SKL | D_KBL)
+#define D_GEN75PLUS	(D_HSW | D_BDW | D_SKL | D_KBL)
+#define D_GEN7PLUS	(D_IVB | D_HSW | D_BDW | D_SKL | D_KBL)
 
-#define D_SKL_PLUS	(D_SKL)
-#define D_BDW_PLUS	(D_BDW | D_SKL)
-#define D_HSW_PLUS	(D_HSW | D_BDW | D_SKL)
-#define D_IVB_PLUS	(D_IVB | D_HSW | D_BDW | D_SKL)
+#define D_SKL_PLUS	(D_SKL | D_KBL)
+#define D_BDW_PLUS	(D_BDW | D_SKL | D_KBL)
+#define D_HSW_PLUS	(D_HSW | D_BDW | D_SKL | D_KBL)
+#define D_IVB_PLUS	(D_IVB | D_HSW | D_BDW | D_SKL | D_KBL)
 
 #define D_PRE_BDW	(D_SNB | D_IVB | D_HSW)
 #define D_PRE_SKL	(D_SNB | D_IVB | D_HSW | D_BDW)
 
-#define D_ALL		(D_SNB | D_IVB | D_HSW | D_BDW | D_SKL)
+#define D_ALL		(D_SNB | D_IVB | D_HSW | D_BDW | D_SKL | D_KBL)
 
 /*
  * Comments copied from i915 driver - i915_reg.h :
@@ -825,6 +852,8 @@ static inline unsigned int vgt_gen_dev_type(struct pgt_device *pdev)
 		return D_BDW;
 	if (IS_SKL(pdev))
 		return D_SKL;
+	if (IS_KBL(pdev))
+		return D_KBL;
 	WARN_ONCE(1, KERN_ERR "vGT: unknown GEN type!\n");
 	return 0;
 }
@@ -903,6 +932,7 @@ extern bool vgt_initial_mmio_setup (struct pgt_device *pdev);
 extern void vgt_initial_opregion_setup(struct pgt_device *pdev);
 extern void state_vreg_init(struct vgt_device *vgt);
 extern void state_sreg_init(struct vgt_device *vgt);
+extern void state_dpy_reg_init(struct vgt_device *vgt);
 
 /* definitions for physical aperture/GM space */
 #define phys_aperture_sz(pdev)		(pdev->bar_size[1])
@@ -988,19 +1018,24 @@ static inline uint64_t vgt_mmio_bar_base(struct vgt_device *vgt)
  * when the VM does not support ballooning, this view starts from
  * GM space ZERO
  */
+#define vgt_guest_aperture_offset(vgt) \
+	__vreg(vgt, vgt_info_off(avail_rs.mappable_gmadr.base))
+#define vgt_guest_hidden_gm_offset(vgt) \
+	__vreg(vgt, vgt_info_off(avail_rs.nonmappable_gmadr.base))
 #define vgt_guest_aperture_base(vgt)	\
-	(vgt->ballooning ?		\
-		(*((u32*)&vgt->state.cfg_space[VGT_REG_CFG_SPACE_BAR1]) & ~0xf) + vgt_aperture_offset(vgt) :	\
+	(vgt->ballooning ? 		\
+		(*((u32*)&vgt->state.cfg_space[VGT_REG_CFG_SPACE_BAR1]) & ~0xf) + vgt_guest_aperture_offset(vgt) : \
 		(*((u32*)&vgt->state.cfg_space[VGT_REG_CFG_SPACE_BAR1]) & ~0xf))
 #define vgt_guest_aperture_end(vgt)	\
 	(vgt_guest_aperture_base(vgt) + vgt_aperture_sz(vgt) - 1)
 #define vgt_guest_visible_gm_base(vgt)	\
-	(vgt->ballooning ? vgt_visible_gm_base(vgt) : gm_base(vgt->pdev))
+	(vgt->ballooning ? gm_base(vgt->pdev) + vgt_guest_aperture_offset(vgt) : \
+		gm_base(vgt->pdev))
 #define vgt_guest_visible_gm_end(vgt)	\
 	(vgt_guest_visible_gm_base(vgt) + vgt_aperture_sz(vgt) - 1)
 #define vgt_guest_hidden_gm_base(vgt)	\
-	(vgt->ballooning ?		\
-		vgt_hidden_gm_base(vgt) :	\
+	(vgt->ballooning ? 		\
+		gm_base(vgt->pdev) + vgt_guest_hidden_gm_offset(vgt) :	\
 		vgt_guest_visible_gm_end(vgt) + 1)
 #define vgt_guest_hidden_gm_end(vgt)	\
 	(vgt_guest_hidden_gm_base(vgt) + vgt_hidden_gm_sz(vgt) - 1)
@@ -1231,6 +1266,9 @@ static inline unsigned long __REG_READ(struct pgt_device *pdev,
 #define ctx_actual_end_time(vgt) ((vgt)->sched_info.actual_end_time)
 #define ctx_rb_empty_delay(vgt) ((vgt)->sched_info.rb_empty_delay)
 #define ctx_tbs_period(vgt) ((vgt)->sched_info.tbs_period)
+#define vgt_time_slice(vgt) ((vgt)->sched_info.time_slice)
+#define vgt_cap(vgt) ((vgt)->sched_info.cap)
+
 
 #define vgt_get_cycles() ({		\
 	cycles_t __ret;				\
@@ -1703,6 +1741,7 @@ void vgt_init_reserved_aperture(struct pgt_device *pdev);
 bool vgt_map_plane_reg(struct vgt_device *vgt, unsigned int reg, unsigned int *p_real_offset);
 
 unsigned int vgt_pa_to_mmio_offset(struct vgt_device *vgt, uint64_t pa);
+uint64_t vgt_mmio_offset_to_pa(struct vgt_device *vgt, uint32_t offset);
 
 static inline void vgt_set_pipe_mapping(struct vgt_device *vgt,
 	unsigned int v_pipe, unsigned int p_pipe)
@@ -1788,6 +1827,7 @@ extern void vgt_submit_commands(struct vgt_device *vgt, int ring_id);
 extern void vgt_sched_update_prev(struct vgt_device *vgt, cycles_t time);
 extern void vgt_sched_update_next(struct vgt_device *vgt);
 extern void vgt_schedule(struct pgt_device *pdev);
+extern void vgt_timeslice_stat(struct vgt_device *prev_vgt);
 extern void vgt_request_force_removal(struct vgt_device *vgt);
 extern int vgt_el_slots_number(vgt_state_ring_t *ring_state);
 

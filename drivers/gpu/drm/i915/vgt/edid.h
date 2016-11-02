@@ -130,6 +130,7 @@ struct vgt_i2c_edid_t {
 };
 
 void vgt_init_i2c_edid(struct vgt_device *vgt);
+bool vgt_init_default_monitor(struct vgt_device *vgt);
 
 bool vgt_i2c_handle_gmbus_read(struct vgt_device *vgt, unsigned int offset,
 	void *p_data, unsigned int bytes);

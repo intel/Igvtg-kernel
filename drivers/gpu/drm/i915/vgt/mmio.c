@@ -277,6 +277,15 @@ unsigned int vgt_pa_to_mmio_offset(struct vgt_device *vgt,
 				& PCI_BAR_ADDR_MASK );
 }
 
+uint64_t vgt_mmio_offset_to_pa(struct vgt_device *vgt,
+	uint32_t offset) {
+	return (vgt->vm_id == 0) ?
+		offset + vgt->pdev->gttmmio_base :
+		offset + ((*(uint64_t *)(vgt->state.cfg_space
+						+ VGT_REG_CFG_SPACE_BAR0))
+				& PCI_BAR_ADDR_MASK);
+}
+
 static inline bool valid_mmio_alignment(struct vgt_mmio_entry *mht,
 		unsigned int offset, int bytes)
 {
@@ -632,7 +641,7 @@ int vgt_hvm_opregion_init(struct vgt_device *vgt, uint32_t gpa)
 	/* modify the vbios parameters for PORTs,
 	 * Let guest see full port capability.
 	 */
-	if (!propagate_monitor_to_guest && !is_current_display_owner(vgt))
+	if (preallocated_monitor_to_guest && !is_current_display_owner(vgt))
 		vgt_prepare_vbios_general_definition(vgt);
 
 	return 0;
@@ -752,6 +761,13 @@ void vgt_setup_reg_info(struct pgt_device *pdev)
 				vgt_get_reg_num(D_SKL), true);
 	}
 
+	if (IS_KBL(pdev)) {
+		vgt_initialize_reg_attr(pdev, vgt_reg_info_bdw,
+				vgt_get_reg_num(D_BDW), true);
+		vgt_initialize_reg_attr(pdev, vgt_reg_info_skl,
+				vgt_get_reg_num(D_KBL), true);
+	}
+
 	/* GDRST can be accessed by byte */
 	mht = vgt_find_mmio_entry(GEN6_GDRST);
 	if (mht)
@@ -792,6 +808,29 @@ static void __vgt_initial_mmio_space (struct pgt_device *pdev,
 
 }
 
+static void __vgt_initial_dpy_reg(struct vgt_device *vgt,
+					reg_attr_t *info, int num)
+{
+	int i, j;
+	reg_attr_t *attr;
+	struct pgt_device *pdev = vgt->pdev;
+
+	attr = info;
+
+	for (i = 0; i < num; i++, attr++) {
+
+		if (!vgt_match_device_attr(pdev, attr))
+			continue;
+
+		if (!reg_is_display(pdev, attr->reg))
+			continue;
+
+		for (j = 0; j < attr->size; j += 4)
+			__vreg(vgt, (attr->reg + j)) =
+			__sreg(vgt, (attr->reg + j)) = 0x0;
+	}
+}
+
 bool vgt_initial_mmio_setup (struct pgt_device *pdev)
 {
 	vgt_reg_t val;
@@ -809,7 +848,7 @@ bool vgt_initial_mmio_setup (struct pgt_device *pdev)
 		__vgt_initial_mmio_space(pdev, vgt_reg_info_hsw, vgt_get_hsw_reg_num());
 	if(IS_BDW(pdev))
 		__vgt_initial_mmio_space(pdev, vgt_reg_info_bdw, vgt_get_reg_num(D_BDW));
-	if(IS_SKL(pdev)) {
+	if (IS_SKL(pdev) || IS_KBL(pdev)) {
 		__vgt_initial_mmio_space(pdev, vgt_reg_info_bdw, vgt_get_reg_num(D_BDW));
 		__vgt_initial_mmio_space(pdev, vgt_reg_info_skl, vgt_get_reg_num(D_SKL));
 	}
@@ -935,4 +974,49 @@ void state_sreg_init(struct vgt_device *vgt)
 		}
 	}
 #endif
+}
+
+void state_dpy_reg_init(struct vgt_device *vgt)
+{
+	int i = 0;
+	struct pgt_device *pdev = vgt->pdev;
+
+	if (vgt->vm_id == 0)
+		return;
+
+	if (preallocated_monitor_to_guest && !is_current_display_owner(vgt)) {
+
+		__vgt_initial_dpy_reg(
+			vgt, vgt_reg_info_general, vgt_get_reg_num(D_ALL));
+		if (IS_HSW(pdev))
+			__vgt_initial_dpy_reg(
+				vgt, vgt_reg_info_hsw, vgt_get_hsw_reg_num());
+		if (IS_BDW(pdev))
+			__vgt_initial_dpy_reg(
+				vgt, vgt_reg_info_bdw, vgt_get_reg_num(D_BDW));
+		if (IS_SKL(pdev)) {
+			__vgt_initial_dpy_reg(
+				vgt, vgt_reg_info_bdw, vgt_get_reg_num(D_BDW));
+			__vgt_initial_dpy_reg(
+				vgt, vgt_reg_info_skl, vgt_get_reg_num(D_SKL));
+		}
+
+		for (i = 0; i < preallocated_monitor_to_guest; i++) {
+			__sreg(vgt, _VGT_TRANS_DDI_FUNC_CTL(TRANSCODER_A+i)) =
+			__vreg(vgt, _VGT_TRANS_DDI_FUNC_CTL(TRANSCODER_A+i)) =
+					TRANS_DDI_FUNC_ENABLE |
+					TRANS_DDI_SELECT_PORT(PORT_B+i) |
+					TRANS_DDI_MODE_SELECT_DP_SST;
+
+			__sreg(vgt, SFUSE_STRAP) |=
+					(SFUSE_STRAP_DDIB_DETECTED >> i);
+			__vreg(vgt, SFUSE_STRAP) = __sreg(vgt, SFUSE_STRAP);
+		}
+
+		__sreg(vgt, PCH_RAWCLK_FREQ) =
+		__vreg(vgt, PCH_RAWCLK_FREQ) = 0x18;
+
+		__sreg(vgt, LCPLL_CTL) =
+		__vreg(vgt, LCPLL_CTL) = 0x48000000;
+	}
 }

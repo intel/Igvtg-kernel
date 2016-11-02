@@ -677,13 +677,45 @@ static inline shadow_page_t *vgt_find_shadow_page(struct vgt_device *vgt,
 #define shadow_page_to_ppgtt_spt(ptr) \
 	container_of(ptr, ppgtt_spt_t, shadow_page)
 
+#define pt_entry_size_shift(pt) \
+	((pt)->vgt->pdev->device_info.gtt_entry_size_shift)
+
+#define pt_entries(pt) \
+	(PAGE_SIZE >> pt_entry_size_shift(pt))
+
+#define for_each_present_guest_entry(gpt, e, i) \
+	for (i = 0; i < pt_entries(gpt); i++) \
+	if (gpt->vgt->pdev->gtt.pte_ops->test_present(ppgtt_get_guest_entry(gpt, e, i)))
+
+#define for_each_present_shadow_entry(spt, e, i) \
+	for (i = 0; i < pt_entries(spt); i++) \
+	if (spt->vgt->pdev->gtt.pte_ops->test_present(ppgtt_get_shadow_entry(spt, e, i)))
+
+
 static void ppgtt_free_shadow_page(ppgtt_spt_t *spt)
 {
+	struct vgt_gtt_pte_ops *ops = spt->vgt->pdev->gtt.pte_ops;
 	trace_spt_free(spt->vgt->vm_id, spt, spt->shadow_page.type);
 
 	vgt_clean_shadow_page(&spt->shadow_page);
 	vgt_clean_guest_page(spt->vgt, &spt->guest_page);
 	list_del_init(&spt->partial_access_list_head);
+
+	/* page table: release gfn tracking for LOGD */
+	vgt_logd_remove(spt->vgt, spt->guest_page.gfn);
+
+	/* remove for each pte entry in this page table */
+	if (gtt_type_is_pte_pt(spt->shadow_page.type)) {
+		gtt_entry_t e;
+		unsigned long index;
+
+		for_each_present_shadow_entry(spt, &e, index) {
+			/* TODO: we need to maintain a
+			 * reference count internally
+			 */
+			vgt_logd_remove(spt->vgt, ops->get_pfn(&e));
+		}
+	}
 
 	mempool_free(spt, spt->vgt->pdev->gtt.mempool);
 }
@@ -781,20 +813,6 @@ static ppgtt_spt_t *ppgtt_find_shadow_page(struct vgt_device *vgt, unsigned long
 
 	return NULL;
 }
-
-#define pt_entry_size_shift(spt) \
-	((spt)->vgt->pdev->device_info.gtt_entry_size_shift)
-
-#define pt_entries(spt) \
-	(PAGE_SIZE >> pt_entry_size_shift(spt))
-
-#define for_each_present_guest_entry(spt, e, i) \
-	for (i = 0; i < pt_entries(spt); i++) \
-	if (spt->vgt->pdev->gtt.pte_ops->test_present(ppgtt_get_guest_entry(spt, e, i)))
-
-#define for_each_present_shadow_entry(spt, e, i) \
-	for (i = 0; i < pt_entries(spt); i++) \
-	if (spt->vgt->pdev->gtt.pte_ops->test_present(ppgtt_get_shadow_entry(spt, e, i)))
 
 static void ppgtt_get_shadow_page(ppgtt_spt_t *spt)
 {
@@ -894,6 +912,8 @@ static ppgtt_spt_t *ppgtt_populate_shadow_page_by_guest_entry(struct vgt_device 
 		if (!hypervisor_set_wp_pages(vgt, &s->guest_page))
 			goto fail;
 
+		vgt_logd_add(vgt, ops->get_pfn(we));
+
 		if (!ppgtt_populate_shadow_page(s))
 			goto fail;
 
@@ -927,6 +947,7 @@ static inline void ppgtt_generate_shadow_entry(gtt_entry_t *se,
 static bool ppgtt_populate_shadow_page(ppgtt_spt_t *spt)
 {
 	struct vgt_device *vgt = spt->vgt;
+	struct vgt_gtt_pte_ops *ops = vgt->pdev->gtt.pte_ops;
 	ppgtt_spt_t *s;
 	gtt_entry_t se, ge;
 	unsigned long i;
@@ -939,6 +960,8 @@ static bool ppgtt_populate_shadow_page(ppgtt_spt_t *spt)
 			if (!gtt_entry_p2m(vgt, &ge, &se))
 				goto fail;
 			ppgtt_set_shadow_entry(spt, &se, i);
+
+			vgt_logd_add(vgt, ops->get_pfn(&ge));
 		}
 		return true;
 	}
@@ -1021,6 +1044,7 @@ static bool ppgtt_handle_guest_entry_add(guest_page_t *gpt,
 		if (!gtt_entry_p2m(vgt, we, &m))
 			goto fail;
 		ppgtt_set_shadow_entry(spt, &m, index);
+		vgt_logd_add(vgt, gpt->gfn);
 	}
 
 	return true;
@@ -1124,6 +1148,12 @@ static bool vgt_sync_oos_page(struct vgt_device *vgt, oos_page_t *oos_page)
 
 		ops->set_entry(oos_page->mem, &new, index, false, NULL);
 		ppgtt_set_shadow_entry(spt, &m, index);
+
+		/* we can not remove old one, since the old one maybe referenced
+		 * in multiple PPGTT tables. Here we only add new ones to make
+		 * sure no guest gfn miss track.
+		 */
+		vgt_logd_add(vgt, ops->get_pfn(&new));
 
 		oos_pte_cnt++;
 	}
@@ -1623,7 +1653,7 @@ struct vgt_mm *vgt_create_mm(struct vgt_device *vgt,
 				mm->page_table_entry_size);
 
 	if (mm->has_shadow_page_table) {
-		for (i = 0; i < mm->page_table_entry_cnt; i++) {
+		for (i = 0; i < mm->page_table_entry_cnt /* 4 */; i++) {
 			ppgtt_get_guest_root_entry(mm, &ge, i);
 			if (!ops->test_present(&ge))
 				continue;
@@ -1863,6 +1893,7 @@ bool gtt_mmio_write(struct vgt_device *vgt, unsigned int off,
 	bool partial_access = (bytes != info->gtt_entry_size);
 	bool hi = (partial_access && (off & (info->gtt_entry_size - 1)));
 	unsigned long gma;
+	unsigned long h_gtt_index;
 	gtt_entry_t e, m;
 	int rc;
 
@@ -1884,6 +1915,8 @@ bool gtt_mmio_write(struct vgt_device *vgt, unsigned int off,
 		return true;
 	}
 
+	h_gtt_index = g2h_gtt_index(vgt, g_gtt_index);
+
 	ggtt_get_guest_entry(ggtt_mm, &e, g_gtt_index);
 
 	memcpy((char *)&e.val64 + (off & (info->gtt_entry_size - 1)), p_data, bytes);
@@ -1903,7 +1936,7 @@ bool gtt_mmio_write(struct vgt_device *vgt, unsigned int off,
 		return false;
 	}
 
-	ggtt_set_shadow_entry(ggtt_mm, &m, g_gtt_index);
+	ggtt_set_shadow_entry(ggtt_mm, &m, h_gtt_index);
 out:
 	ggtt_set_guest_entry(ggtt_mm, &e, g_gtt_index);
 	return true;
@@ -2235,7 +2268,7 @@ bool vgt_gtt_init(struct pgt_device *pdev)
 		pdev->gtt.mm_alloc_page_table = gen7_mm_alloc_page_table;
 		pdev->gtt.mm_free_page_table = gen7_mm_free_page_table;
 
-	} else if (IS_BDW(pdev) || IS_SKL(pdev)) {
+	} else if (IS_BDW(pdev) || IS_SKL(pdev) || IS_KBL(pdev)) {
 		pdev->gtt.pte_ops = &gen8_gtt_pte_ops;
 		pdev->gtt.gma_ops = &gen8_gtt_gma_ops;
 		pdev->gtt.mm_alloc_page_table = gen8_mm_alloc_page_table;

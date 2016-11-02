@@ -401,6 +401,77 @@ TRACE_EVENT(shadow_bb_relocate,
 
 		TP_printk("%s", __entry->buf)
 );
+
+TRACE_EVENT(logd,
+		TP_PROTO(int vm_id, char act[7],
+			unsigned long gfn, char ret[10]),
+
+		TP_ARGS(vm_id, act, gfn, ret),
+
+		TP_STRUCT__entry(
+			__array(char, buf, MAX_BUF_LEN)
+		),
+
+		TP_fast_assign(
+			snprintf(__entry->buf, MAX_BUF_LEN,
+			"LOGD: VM-%d %s gfn=0x%lx %s",
+			vm_id, act, gfn, ret);
+		),
+
+		TP_printk("%s", __entry->buf)
+);
+
+TRACE_EVENT(qos_ts_alloc,
+		TP_PROTO(int vm_id, int stage, int64_t tslice),
+
+		TP_ARGS(vm_id, stage, tslice),
+
+		TP_STRUCT__entry(
+			__array(char, buf, MAX_BUF_LEN)
+		),
+
+		TP_fast_assign(
+			snprintf(__entry->buf, MAX_BUF_LEN,
+			"VM-%d: stage %d, tslice alloc %lld", vm_id, stage, tslice);
+		),
+
+		TP_printk("%s", __entry->buf)
+);
+
+TRACE_EVENT(qos_ts_used,
+		TP_PROTO(int vm_id, int64_t delta, int64_t tslice),
+
+		TP_ARGS(vm_id, delta, tslice),
+
+		TP_STRUCT__entry(
+			__array(char, buf, MAX_BUF_LEN)
+		),
+
+		TP_fast_assign(
+			snprintf(__entry->buf, MAX_BUF_LEN,
+			"VM-%d: used %lld, tslice left %lld", vm_id, delta, tslice);
+		),
+
+		TP_printk("%s", __entry->buf)
+);
+
+TRACE_EVENT(qos_pick,
+		TP_PROTO(int cur_vm_id, int next_vm_id, int64_t tslice),
+
+		TP_ARGS(cur_vm_id, next_vm_id, tslice),
+
+		TP_STRUCT__entry(
+			__array(char, buf, MAX_BUF_LEN)
+		),
+
+		TP_fast_assign(
+		snprintf(__entry->buf, MAX_BUF_LEN,
+			"cur VM-%d, next VM-%d, next tslice left %lld", cur_vm_id, next_vm_id, tslice);
+		),
+
+		TP_printk("%s", __entry->buf)
+);
+
 #endif /* _VGT_TRACE_H_ */
 
 /* This part must be out of protection */

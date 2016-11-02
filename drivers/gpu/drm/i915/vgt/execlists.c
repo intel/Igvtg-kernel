@@ -694,21 +694,20 @@ static void update_shadow_regstate_from_guest(struct vgt_device *vgt,
 	src_ctx = (struct reg_state_ctx_header *)src;
 	ref_ctx = el_ctx->g_ctx_buf;
 
-	/* always need to update the indirect_ctx and bb_per_ctx value in
-	 * shadow context.
-	 */
-	if (shadow_indirect_ctx_bb) {
-		dest_ctx->rcs_indirect_ctx.val =
-			(dest_ctx->rcs_indirect_ctx.val &
-				(~INDIRECT_CTX_ADDR_MASK)) |
-				el_ctx->shadow_indirect_ctx.shadow_ctx_base;
-		dest_ctx->bb_per_ctx_ptr.val =
-			(dest_ctx->bb_per_ctx_ptr.val &
-				(~BB_PER_CTX_ADDR_MASK)) |
-				el_ctx->shadow_bb_per_ctx.shadow_bb_base;
-	}
-
 	if (tail_only) {
+		/* always need to update the indirect_ctx and bb_per_ctx value in
+		 * shadow context.
+		 */
+		if (shadow_indirect_ctx_bb) {
+			dest_ctx->rcs_indirect_ctx.val =
+				(dest_ctx->rcs_indirect_ctx.val &
+					(~INDIRECT_CTX_ADDR_MASK)) |
+					el_ctx->shadow_indirect_ctx.shadow_ctx_base;
+			dest_ctx->bb_per_ctx_ptr.val =
+				(dest_ctx->bb_per_ctx_ptr.val &
+					(~BB_PER_CTX_ADDR_MASK)) |
+					el_ctx->shadow_bb_per_ctx.shadow_bb_base;
+		}
 		dest_ctx->ring_tail.val = src_ctx->ring_tail.val;
 		return;
 	}
@@ -751,6 +750,17 @@ static void update_shadow_regstate_from_guest(struct vgt_device *vgt,
 	/* update the shadow fields */
 	if (shadow_cmd_buffer)
 		dest_ctx->rb_start.val = el_ctx->shadow_rb.shadow_rb_base;
+
+	if (shadow_indirect_ctx_bb) {
+		dest_ctx->rcs_indirect_ctx.val =
+			(dest_ctx->rcs_indirect_ctx.val &
+				(~INDIRECT_CTX_ADDR_MASK)) |
+				el_ctx->shadow_indirect_ctx.shadow_ctx_base;
+		dest_ctx->bb_per_ctx_ptr.val =
+			(dest_ctx->bb_per_ctx_ptr.val &
+				(~BB_PER_CTX_ADDR_MASK)) |
+				el_ctx->shadow_bb_per_ctx.shadow_bb_base;
+	}
 
 	ppgtt_update_shadow_ppgtt_for_ctx(vgt, el_ctx);
 }
@@ -897,9 +907,13 @@ static int vgt_create_shadow_pages(struct vgt_device *vgt, struct execlist_conte
 	unsigned long hpa;
 	uint32_t size;
 	uint32_t rsvd_pages_idx;
-	unsigned long g_gma;
+	uint64_t g_gma;
 	unsigned long s_gma;
 	int i;
+
+	g_gma = ((unsigned long)el_ctx->guest_context.lrca) << GTT_PAGE_SHIFT;
+	if (g2h_gm(vgt, &g_gma))
+		return -1;
 
 	size = (EXECLIST_CTX_PAGES(ring_id) << GTT_PAGE_SHIFT);
 	hpa = rsvd_aperture_alloc(vgt->pdev, size);
@@ -908,8 +922,6 @@ static int vgt_create_shadow_pages(struct vgt_device *vgt, struct execlist_conte
 			vgt->vm_id);
 		return -1;
 	}
-
-	g_gma = ((unsigned long)el_ctx->guest_context.lrca) << GTT_PAGE_SHIFT;
 	s_gma = aperture_2_gm(vgt->pdev, hpa);
 
 	el_ctx->shadow_lrca = s_gma >> GTT_PAGE_SHIFT;
@@ -1438,6 +1450,25 @@ static void vgt_emulate_context_status_change(struct vgt_device *vgt,
 
 	ASSERT((el_slot_ctx_idx == 0) || (el_slot_ctx_idx == 1));
 	el_ctx = el_slot->el_ctxs[el_slot_ctx_idx];
+
+	/* TODO: Should put the tsc record into the interrupt routine to
+	 * make accuracy, need maintain some structure to link tsc and ctx.
+	 */
+	if (ctx_status->active_to_idle) {
+		/* This logic mainly to handle the two elements case:
+		 * busy_time = second element complete tsc - submit tsc;
+		 * el_slot->el_ctxs[1] == NULL means only one element exist
+		 * it's OK to record the complete_tsc after idle;
+		 * el_slot_ctx_idx == 1 means the second element become idle,
+		 * for other condition means element switch happen, skip
+		 * record the complete tsc.
+		 */
+		if (el_slot->el_ctxs[1] == NULL || el_slot_ctx_idx == 1) {
+			el_ctx->complete_tsc = vgt_get_cycles();
+			vgt->sched_info.busy_time +=
+				el_ctx->complete_tsc - el_ctx->submit_tsc;
+		}
+	}
 
 	lite_restore = ctx_status->preempted && ctx_status->lite_restore;
 
@@ -2270,6 +2301,11 @@ int vgt_submit_execlist(struct vgt_device *vgt, enum vgt_ring_id ring_id)
 
 	if (vgt_validate_elsp_descs(vgt, &context_descs[0], &context_descs[1])) {
 		execlist->el_ctxs[0]->ctx_running = true;
+		execlist->el_ctxs[0]->submit_tsc = vgt_get_cycles();
+		if (context_descs[1].valid) {
+			execlist->el_ctxs[1]->submit_tsc =
+				execlist->el_ctxs[0]->submit_tsc;
+		}
 		vgt_hw_ELSP_write(vgt, ring_id, &context_descs[0],
 					&context_descs[1]);
 	}

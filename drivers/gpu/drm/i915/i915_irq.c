@@ -2981,6 +2981,9 @@ static void i915_hangcheck_elapsed(struct work_struct *work)
 #define BUSY 1
 #define KICK 5
 #define HUNG 20
+#ifdef DRM_I915_VGT_SUPPORT
+#define ACTIVE_DECAY 15
+#endif
 
 	if (!i915.enable_hangcheck)
 		return;
@@ -3056,8 +3059,15 @@ static void i915_hangcheck_elapsed(struct work_struct *work)
 			/* Gradually reduce the count so that we catch DoS
 			 * attempts across multiple batches.
 			 */
-			if (ring->hangcheck.score > 0)
-				ring->hangcheck.score--;
+#ifdef DRM_I915_VGT_SUPPORT
+            if (ring->hangcheck.score > 0)
+                ring->hangcheck.score -= ACTIVE_DECAY;
+            if (ring->hangcheck.score < 0)
+                ring->hangcheck.score = 0;
+#else
+            if (ring->hangcheck.score > 0)
+                ring->hangcheck.score--;
+#endif
 
 			ring->hangcheck.acthd = ring->hangcheck.max_acthd = 0;
 		}
