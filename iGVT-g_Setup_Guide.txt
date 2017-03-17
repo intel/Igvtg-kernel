@@ -1,5 +1,5 @@
 	Intel® GVT-g Setup Guide
-		Nov, 2016
+		Mar, 2017
 
 Contents
 
@@ -98,14 +98,14 @@ Contents
 
    For XenGT:
 
-	Kernel: https://github.com/01org/igvtg-kernel (2016q3-4.3.0 branch)
-	Qemu: https://github.com/01org/igvtg-qemu (2016q3-2.3.0 branch)
-	Xen: https://github.com/01org/igvtg-xen (2016q3-4.6 branch)
+	Kernel: https://github.com/01org/igvtg-kernel (2016q4-4.3.0 branch)
+	Qemu: https://github.com/01org/igvtg-qemu (2016q4-2.3.0 branch)
+	Xen: https://github.com/01org/igvtg-xen (2016q4-4.6 branch)
 
    For KVMGT:
 
-	Kernel: https://github.com/01org/igvtg-kernel (2016q3-4.3.0 branch)
-	Qemu: https://github.com/01org/igvtg-qemu (2016q3-2.3.0 branch)
+	Kernel: https://github.com/01org/igvtg-kernel (2016q4-4.3.0 branch)
+	Qemu: https://github.com/01org/igvtg-qemu (2016q4-2.3.0 branch)
 
 
 3.2 Build Kernel
@@ -119,7 +119,7 @@ Contents
    Note: for UEFI environment, use grubx64.efi instead of xen.efi to load system
 	# git clone https://github.com/01org/igvtg-kernel kernel_src
 	# cd kernel_src/
-	# git checkout 2016q3-4.3.0
+	# git checkout 2016q4-4.3.0
 	# cp config-4.3.0-host .config
 	# make -j8 && make modules_install
 	# mkinitramfs -o /boot/initrd.img -v 4.3.0-rc6-vgt+
@@ -136,7 +136,7 @@ Contents
 
 3.3.1 For KVMGT
 
-	# git clone https://github.com/01org/igvtg-qemu -b 2016q3-2.3.0 qemu_src
+	# git clone https://github.com/01org/igvtg-qemu -b 2016q4-2.3.0 qemu_src
 	# cd qemu_src/
 	# git submodule update --init dtc
 	# git submodule update --init roms/seabios
@@ -157,8 +157,8 @@ Contents
 
 	# git clone https://github.com/01org/igvtg-xen xen_src
 	# cd xen_src/
-	# git checkout 2016q3-4.6
-	# git clone https://github.com/01org/igvtg-qemu.git -b 2016q3-2.3.0 qemu-xen
+	# git checkout 2016q4-4.6
+	# git clone https://github.com/01org/igvtg-qemu.git -b 2016q4-2.3.0 qemu-xen
 	# cp -r qemu-xen/ tools/
 	# sed -i '/QEMU_UPSTREAM_URL/s:http\://xenbits.xen.org/git-http/qemu-upstream-4.6-testing.git:$(XEN_ROOT)/tools/qemu-xen:' Config.mk
 	# sed -i '/QEMU_UPSTREAM_URL/s:git\://xenbits.xen.org/qemu-upstream-4.6-testing.git:$(XEN_ROOT)/tools/qemu-xen:' Config.mk
