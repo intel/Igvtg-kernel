@@ -97,7 +97,7 @@ static void __kvm_set_rflags(struct kvm_vcpu *vcpu, unsigned long rflags);
 struct kvm_x86_ops *kvm_x86_ops;
 EXPORT_SYMBOL_GPL(kvm_x86_ops);
 
-static bool ignore_msrs = 0;
+static bool ignore_msrs = 1;
 module_param(ignore_msrs, bool, S_IRUGO | S_IWUSR);
 
 #ifdef CONFIG_KVMGT

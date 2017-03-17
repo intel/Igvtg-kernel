@@ -1007,8 +1007,11 @@ static int vgt_cmd_handler_pipe_control(struct parser_exec_state *s)
 		}
 	}
 
-	if (!rc)
+	if (!rc) {
 		s->cmd_issue_irq = (cmd_val(s, 1) & PIPE_CONTROL_NOTIFY) ? true : false;
+		set_bit(GT_RENDER_PIPECTL_NOTIFY_INTERRUPT,
+				(void *)&s->vgt->rb[s->ring_id].request_irq);
+	}
 
 	return rc;
 }
@@ -1016,6 +1019,7 @@ static int vgt_cmd_handler_pipe_control(struct parser_exec_state *s)
 static int vgt_cmd_handler_mi_user_interrupt(struct parser_exec_state *s)
 {
 	s->cmd_issue_irq = true;
+	set_bit(GT_RENDER_USER_INTERRUPT, (void *)&s->vgt->rb[s->ring_id].request_irq);
 	return 0;
 }
 

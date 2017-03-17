@@ -62,12 +62,13 @@ static const struct drm_i915_gem_object_ops i915_gem_vgtbuffer_ops = {
 
 static struct sg_table *
 i915_create_sg_pages_for_vgtbuffer(struct drm_device *dev,
-			     u32 start, u32 num_pages)
+			u32 start, u32 num_pages, u32 vmid)
 {
-	struct drm_i915_private *dev_priv = dev->dev_private;
 	struct sg_table *st;
 	struct scatterlist *sg;
 	int i;
+	u64 pte;
+	u32 index = start >> PAGE_SHIFT;
 
 	st = kmalloc(sizeof(*st), GFP_KERNEL);
 	if (st == NULL)
@@ -79,25 +80,21 @@ i915_create_sg_pages_for_vgtbuffer(struct drm_device *dev,
 	}
 
 	if (INTEL_INFO(dev)->gen >= 8) {
-		gen8_pte_t __iomem *gtt_entries =
-			(gen8_pte_t __iomem *)dev_priv->gtt.gsm +
-			(start >> PAGE_SHIFT);
 		for_each_sg(st->sgl, sg, num_pages, i) {
 			sg->offset = 0;
 			sg->length = PAGE_SIZE;
+			pte = vgt_read_ggtt_pte(vmid, index + i);
 			sg_dma_address(sg) =
-				GEN8_DECODE_PTE(readq(&gtt_entries[i]));
+				GEN8_DECODE_PTE(pte);
 			sg_dma_len(sg) = PAGE_SIZE;
 		}
 	} else {
-		gen6_pte_t __iomem *gtt_entries =
-			(gen6_pte_t __iomem *)dev_priv->gtt.gsm +
-			(start >> PAGE_SHIFT);
 		for_each_sg(st->sgl, sg, num_pages, i) {
 			sg->offset = 0;
 			sg->length = PAGE_SIZE;
+			pte = vgt_read_ggtt_pte(vmid, index + i);
 			sg_dma_address(sg) =
-				GEN7_DECODE_PTE(readq(&gtt_entries[i]));
+				GEN7_DECODE_PTE(pte);
 			sg_dma_len(sg) = PAGE_SIZE;
 		}
 	}
@@ -107,7 +104,7 @@ i915_create_sg_pages_for_vgtbuffer(struct drm_device *dev,
 
 struct drm_i915_gem_object *
 i915_gem_object_create_vgtbuffer(struct drm_device *dev,
-				 u32 start, u32 num_pages)
+				u32 start, u32 num_pages, u32 vmid)
 {
 	struct drm_i915_gem_object *obj;
 	obj = i915_gem_object_alloc(dev);
@@ -117,7 +114,8 @@ i915_gem_object_create_vgtbuffer(struct drm_device *dev,
 	drm_gem_private_object_init(dev, &obj->base, num_pages << PAGE_SHIFT);
 	i915_gem_object_init(obj, &i915_gem_vgtbuffer_ops);
 
-	obj->pages = i915_create_sg_pages_for_vgtbuffer(dev, start, num_pages);
+	obj->pages = i915_create_sg_pages_for_vgtbuffer(dev, start,
+		num_pages, vmid);
 	if (obj->pages == NULL) {
 		i915_gem_object_free(obj);
 		return NULL;
@@ -234,7 +232,8 @@ i915_gem_vgtbuffer_ioctl(struct drm_device *dev, void *data,
 	if (args->flags & I915_VGTBUFFER_QUERY_ONLY)
 		return 0;
 
-	obj = i915_gem_object_create_vgtbuffer(dev, args->start, args->size);
+	obj = i915_gem_object_create_vgtbuffer(dev, args->start,
+		args->size, args->vmid);
 	if (!obj) {
 		DRM_DEBUG_DRIVER("VGT_GEM: Failed to create gem object"
 					" for VM FB!\n");

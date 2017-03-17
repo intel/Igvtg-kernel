@@ -159,6 +159,7 @@ int create_vgt_instance(struct pgt_device *pdev, struct vgt_device **ptr_vgt, vg
 	vgt->state.aperture_base = phys_aperture_base(pdev);
 
 	/* init aperture/gm ranges allocated to this vgt */
+	vgt->share_hidden_gm = vgt->vm_id ? 1 : 0;
 	if ((rc = allocate_vm_aperture_gm_and_fence(vgt, vp)) < 0) {
 		printk("vGT: %s: no enough available aperture/gm/fence!\n", __func__);
 		goto err2;
@@ -423,6 +424,12 @@ void vgt_release_instance(struct vgt_device *vgt)
 	if (shadow_tail_based_qos)
 		vgt_destroy_rb_tailq(vgt);
 
+	/* clear the gtt entries for GM of this vgt device */
+	/* vgt_clear_gtt clears per-vGPU shadow GGTT for hidden gm for
+	 * gen8+ platforms, so should go ahead before vgt_clean_vgtt() which
+	 * destroys all page tables including per-vGPU shadow GGTT
+	 */
+	vgt_clear_gtt(vgt);
 	vgt_clean_vgtt(vgt);
 
 	if (vgt->state.opregion_va) {
@@ -473,8 +480,6 @@ void vgt_release_instance(struct vgt_device *vgt)
 		}
 	}
 
-	/* clear the gtt entries for GM of this vgt device */
-	vgt_clear_gtt(vgt);
 
 	free_vm_aperture_gm_and_fence(vgt);
 	free_vm_rsvd_aperture(vgt);

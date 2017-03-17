@@ -95,6 +95,7 @@ extern bool render_engine_reset;
 extern int mocs_saverestore_mode;
 extern bool enable_panel_fitting;
 extern bool enable_reset;
+extern int hang_threshold;
 extern int reset_count_threshold;
 extern int reset_dur_threshold;
 extern int reset_max_threshold;
@@ -146,9 +147,30 @@ extern bool logd_enable;
 #define VGT_RING_TIMEOUT	500	/* in ms */
 
 /* Maximum VMs supported by vGT. Actual number is device specific */
-#define VGT_MAX_VMS			8
+#define VGT_MAX_VMS			16
 #define VGT_RSVD_APERTURE_SZ		(32*SIZE_1MB)	/* reserve 8MB for vGT itself */
 
+#define IS_PER_VGPU_SHADOW_GGTT_EANBLED(vgt, index) (vgt &&		\
+		vgt->gtt.ggtt_mm &&					\
+		vgt->gtt.ggtt_mm->shadow_page_table &&			\
+		(index >= vgt_hidden_gm_base(vgt) >> GTT_PAGE_SHIFT) &&	\
+		(index <= vgt_hidden_gm_end(vgt) >> GTT_PAGE_SHIFT))
+
+#define VGT_HIGHGM_SLOT_SZ (64) /* shared high gm slot size in MB */
+#define VGT_HIGHGM_SLOT_MASK (~(VGT_HIGHGM_SLOT_SZ - 1))
+/* page number in each shared high gm slot */
+#define VGT_HIGHGM_PER_SLOT_PAGE_NUM ((VGT_HIGHGM_SLOT_SZ * SIZE_1MB) >> \
+		GTT_PAGE_SHIFT)
+/* slot size is defined as 64M. slot maximum num is 64 (= 4G/64M) */
+#define VGT_HIGHGM_SLOT_MAX_NUM (4*SIZE_1MB/VGT_HIGHGM_SLOT_SZ)
+
+#define vgt_gma_to_highgm_slot_idx(vgt, gma)				\
+		((gma - hidden_gm_base(vgt->pdev)) /			\
+		(VGT_HIGHGM_SLOT_SZ * SIZE_1MB))
+#define vgt_highgm_slot_idx_to_gma(vgt, idx)				\
+		(vgt->hidden_gm_offset + idx*VGT_HIGHGM_SLOT_SZ*SIZE_1MB)
+#define vgt_highgm_slot_idx_to_page_idx(vgt, idx)			\
+		(vgt_highgm_slot_idx_to_gma(vgt, idx) >> GTT_PAGE_SHIFT)
 /*
  * The maximum GM size supported by VGT GM resource allocator.
  */
@@ -292,6 +314,13 @@ struct vgt_device {
 	int			fence_base;
 	int			fence_sz;
 
+	uint8_t share_hidden_gm;	/* indicate if the vGPU is willing to
+					 * share hidden gm with other vGPUs
+					 */
+	uint32_t hidden_gm_slot_start_idx;	/*index of a vGPU's first hidden
+						 * gm slot
+						 */
+	uint32_t hidden_gm_slot_num; /* hidden gm slots number of a vGPU */
 
 	/* TODO: move to hvm_info  */
 	unsigned long low_mem_max_gpfn;	/* the max gpfn of the <4G memory */
@@ -380,6 +409,8 @@ struct vgt_mmio_dev;
 enum {
 	RESET_INPROGRESS = 0,
 	WAIT_RESET,
+	HW_RESET,
+	VM_RESET,
 };
 
 #define device_is_reseting(pdev) \
@@ -405,6 +436,26 @@ struct vgt_device_info {
 	u32 max_support_vms;
 };
 
+struct hidden_gm_slot {
+	struct vgt_device *owner;      /* one slot can be shared by
+					* multiple vGPUs. but physically
+					* it only contains content of its
+					* owner vGPU. when a vGPU becomes
+					* render owner, it will be owner
+					* of the slots it occupies
+					*/
+	u32 current_vgpu_num;	       /* record currently how many vGPUs
+					* are sharing this slot
+					*/
+	u32 max_vgpu_num;	       /* max vGPU number a slot can hold
+					* currently only 3 values:
+					* 0: no vGPU;
+					* 1: 1 vGPU;
+					* N: N=VGT_MAX_VMS
+					*/
+};
+
+
 /* per-device structure */
 struct pgt_device {
 	struct list_head	list; /* list node for 'pgt_devices' */
@@ -421,6 +472,7 @@ struct pgt_device {
 	wait_queue_head_t destroy_wq;
 
 	unsigned long device_reset_flags;
+	u32 instdone[I915_NUM_INSTDONE_REG];
 
 	uint32_t request;
 
@@ -472,6 +524,7 @@ struct pgt_device {
 
 	uint64_t rsvd_aperture_sz;
 	uint64_t rsvd_aperture_base;
+	struct hidden_gm_slot hidden_gm_slots[VGT_HIGHGM_SLOT_MAX_NUM];
 	uint64_t scratch_page;		/* page used for data written from GPU */
 
 	struct vgt_device *device[VGT_MAX_VMS];	/* a list of running VMs */
@@ -944,6 +997,7 @@ extern void state_dpy_reg_init(struct vgt_device *vgt);
 #define gm_base(pdev)			(0ULL)
 #define gm_pages(pdev)			(gm_sz(pdev) >> GTT_PAGE_SHIFT)
 #define hidden_gm_base(pdev)		(phys_aperture_sz(pdev))
+#define hidden_gm_sz(pdev)		(gm_sz(pdev) - hidden_gm_base(pdev))
 
 #define aperture_2_gm(pdev, addr)	(addr - phys_aperture_base(pdev))
 #define v_aperture(pdev, addr)		(phys_aperture_vbase(pdev) + (addr))
@@ -997,7 +1051,11 @@ static inline uint64_t vgt_mmio_bar_base(struct vgt_device *vgt)
 #define vgt_aperture_sz(vgt)		(vgt->aperture_sz)
 #define vgt_gm_sz(vgt)			(vgt->gm_sz)
 #define vgt_hidden_gm_sz(vgt)		(vgt_gm_sz(vgt) - vgt_aperture_sz(vgt))
-
+#define vgt_hidden_gm_slotidx_to_slot(vgt, idx)	\
+	((struct hidden_gm_slot *)	\
+	(&vgt->pdev->hidden_gm_slots[vgt->hidden_gm_slot_start_idx + idx]))
+#define hidden_gm_slotidx_to_slot(pdev, idx)	\
+	(struct hidden_gm_slot *)(&pdev->hidden_gm_slots[idx])
 #define vgt_aperture_end(vgt)		\
 	(vgt_aperture_base(vgt) + vgt_aperture_sz(vgt) - 1)
 #define vgt_visible_gm_base(vgt)	\
@@ -1768,6 +1826,8 @@ extern void i915_handle_error(struct drm_device *dev, bool wedged,
 extern int i915_wait_error_work_complete(struct drm_device *dev);
 
 int vgt_reset_device(struct pgt_device *pgt);
+bool vgt_do_engine_reset(struct pgt_device *pdev, int ring_id);
+
 bool vgt_reset_stat(struct vgt_device *vgt);
 int vgt_del_state_sysfs(vgt_params_t vp);
 void reset_cached_interrupt_registers(struct pgt_device *pdev);

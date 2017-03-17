@@ -96,12 +96,16 @@
 static inline void
 logd_hash_add_page(struct vgt_device *vgt, unsigned long gfn)
 {
+/*
+* TO do: need to optimize the memory management logic for logd hash.
+*/
 	logd_page_t *logd_page = kzalloc(sizeof(logd_page_t), GFP_ATOMIC);
 
 	if (!logd_page) {
 		vgt_err("Fail to alloc sizeof %d.\n", (int) sizeof(logd_page_t));
 		vgt_logd_finit(vgt);
 		logd_enable = false;
+		return;
 	}
 
 	INIT_HLIST_NODE(&logd_page->node);
@@ -339,7 +343,9 @@ void vgt_logd_add(struct vgt_device *vgt, unsigned long gfn)
 	 * Here only add hash with bit not in bitmap and vgpu_bitmap
 	 */
 	if (!LOGD_BITMAP(slot, bit_offset)) {
+#if 0
 		logd_hash_add_page(vgt, gfn);
+#endif
 		/* add to dirty_bitmap, thus gfn added next time can be detected
 		 * if it is duplicated or not in hash
 		 */
@@ -407,9 +413,11 @@ int vgt_logd_slot_sync(struct vgt_device *vgt,
 		spin_lock(&vgt->logd.logd_lock);
 		if (!is_dirty) {
 			/* must handle before clear dirty_bitmap */
+#if 0
 			if (LOGD_BITMAP(slot, bit) && !LOGD_VGPU(slot, bit)) {
 				logd_hash_remove_page(vgt, gfn);
 			}
+#endif
 			clear_bit(bit, slot->dirty_bitmap);
 		} else {
 			n_dirty_pages++;

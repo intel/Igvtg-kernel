@@ -666,6 +666,8 @@ struct kernel_dm kvmgt_kdm = {
 	.gpa_to_va = kvmgt_gpa_to_hva,
 	.read_va = kvmgt_read_hva,
 	.write_va = kvmgt_write_hva,
+	.pre_migrate = NULL,
+	.post_migrate = NULL,
 };
 EXPORT_SYMBOL(kvmgt_kdm);
 

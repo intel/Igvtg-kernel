@@ -53,6 +53,8 @@ struct kernel_dm {
 	void *(*gpa_to_va)(struct vgt_device *vgt, unsigned long gap);
 	bool (*read_va)(struct vgt_device *vgt, void *va, void *val, int len, int atomic);
 	bool (*write_va)(struct vgt_device *vgt, void *va, void *val, int len, int atomic);
+	bool (*pre_migrate)(struct vgt_device *vgt);
+	bool (*post_migrate)(struct vgt_device *vgt);
 };
 
 #endif /* _VGT_HYPERCALL_H_ */

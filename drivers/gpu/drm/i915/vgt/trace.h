@@ -472,6 +472,40 @@ TRACE_EVENT(qos_pick,
 		TP_printk("%s", __entry->buf)
 );
 
+TRACE_EVENT(irq_lifecycle,
+		TP_PROTO(const char *action),
+
+		TP_ARGS(action),
+
+		TP_STRUCT__entry(
+			__array(char, buf, MAX_BUF_LEN)
+		),
+
+		TP_fast_assign(
+			snprintf(__entry->buf, MAX_BUF_LEN,
+				"%s\n", action);
+		),
+
+		TP_printk("%s", __entry->buf)
+);
+
+TRACE_EVENT(vm_switch,
+		TP_PROTO(int cur_vm_id, int next_vm_id),
+
+		TP_ARGS(cur_vm_id, next_vm_id),
+
+		TP_STRUCT__entry(
+			__array(char, buf, MAX_BUF_LEN)
+		),
+
+		TP_fast_assign(
+		snprintf(__entry->buf, MAX_BUF_LEN,
+			"------VM-%d ---> VM-%d------", cur_vm_id, next_vm_id);
+		),
+
+		TP_printk("%s", __entry->buf)
+);
+
 #endif /* _VGT_TRACE_H_ */
 
 /* This part must be out of protection */

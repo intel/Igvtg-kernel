@@ -259,6 +259,8 @@ struct execlist_context {
 
 	struct hlist_node node;
 
+	bool lazy; /* flag to indicate this CTX is lazy CTX*/
+
 	cycles_t submit_tsc;
 	cycles_t complete_tsc;
 };

@@ -168,6 +168,44 @@ static gtt_entry_t *gtt_set_entry32(void *pt, gtt_entry_t *e,
 	return e;
 }
 
+static inline
+void vgt_write_shadow_gtt64(struct vgt_device *vgt, u32 index, u64 val)
+{
+	ASSERT((index >= vgt_hidden_gm_base(vgt) >> GTT_PAGE_SHIFT) &&
+		(index <= vgt_hidden_gm_end(vgt) >> GTT_PAGE_SHIFT));
+	*((u64 *)vgt->gtt.ggtt_mm->shadow_page_table + index -
+		(vgt_hidden_gm_base(vgt) >> GTT_PAGE_SHIFT)) = val;
+}
+
+static inline
+u64 vgt_read_shadow_gtt64(struct vgt_device *vgt, u32 index)
+{
+	ASSERT((index >= vgt_hidden_gm_base(vgt) >> GTT_PAGE_SHIFT) &&
+		(index <= vgt_hidden_gm_end(vgt) >> GTT_PAGE_SHIFT));
+	return *((u64 *)vgt->gtt.ggtt_mm->shadow_page_table + index -
+		(vgt_hidden_gm_base(vgt) >> GTT_PAGE_SHIFT));
+}
+
+static inline
+bool need_write_to_ggtt(struct vgt_device *vgt, unsigned long index)
+{
+	bool is_needed = false;
+	struct pgt_device *pdev = vgt->pdev;
+
+	if (current_render_owner(pdev) == vgt)
+		is_needed = true;
+	else {
+		u32 slot_idx = vgt_gma_to_highgm_slot_idx(vgt,
+			(index << GTT_PAGE_SHIFT));
+		struct hidden_gm_slot *slot =
+			hidden_gm_slotidx_to_slot(pdev, slot_idx);
+
+		if (slot->owner == vgt)
+			is_needed = true;
+	}
+	return is_needed;
+}
+
 static inline gtt_entry_t *gtt_get_entry64(void *pt, gtt_entry_t *e,
 		unsigned long index, bool hypervisor_access,
 		struct vgt_device *vgt)
@@ -176,9 +214,13 @@ static inline gtt_entry_t *gtt_get_entry64(void *pt, gtt_entry_t *e,
 
 	ASSERT(info->gtt_entry_size == 8);
 
-	if (!pt)
-		e->val64 = vgt_read_gtt64(e->pdev, index);
-	else {
+	/* case pt = NULL is for GGTT*/
+	if (!pt) {
+		if (IS_PER_VGPU_SHADOW_GGTT_EANBLED(vgt, index)) {
+			e->val64 = vgt_read_shadow_gtt64(vgt, index);
+		} else
+			e->val64 = vgt_read_gtt64(e->pdev, index);
+	} else {
 		if (!hypervisor_access)
 			e->val64 = *((u64 *)pt + index);
 		else
@@ -195,9 +237,15 @@ static inline gtt_entry_t *gtt_set_entry64(void *pt, gtt_entry_t *e,
 
 	ASSERT(info->gtt_entry_size == 8);
 
-	if (!pt)
-		vgt_write_gtt64(e->pdev, index, e->val64);
-	else {
+	/* case pt = NULL is for GGTT*/
+	if (!pt) {
+		if (IS_PER_VGPU_SHADOW_GGTT_EANBLED(vgt, index)) {
+			vgt_write_shadow_gtt64(vgt, index, e->val64);
+			if (need_write_to_ggtt(vgt, index))
+				vgt_write_gtt64(e->pdev, index, e->val64);
+		} else
+			vgt_write_gtt64(e->pdev, index, e->val64);
+	} else {
 		if (!hypervisor_access)
 			*((u64 *)pt + index) = e->val64;
 		else
@@ -482,7 +530,7 @@ gtt_entry_t *vgt_mm_get_entry(struct vgt_mm *mm,
 			index += mm->pde_base_index;
 	}
 
-	ops->get_entry(page_table, e, index, false, NULL);
+	ops->get_entry(page_table, e, index, false,  mm->vgt);
 	ops->test_pse(e);
 
 	return e;
@@ -507,7 +555,7 @@ gtt_entry_t *vgt_mm_set_entry(struct vgt_mm *mm,
 			index += mm->pde_base_index;
 	}
 
-	return ops->set_entry(page_table, e, index, false, NULL);
+	return ops->set_entry(page_table, e, index, false, mm->vgt);
 }
 
 /*
@@ -1550,6 +1598,8 @@ bool gen8_mm_alloc_page_table(struct vgt_mm *mm)
 			return true;
 		mm->shadow_page_table = mem + mm->page_table_entry_size;
 	} else if (mm->type == VGT_MM_GGTT) {
+		u32 shadow_ggtt_pt_size = info->gtt_entry_size *
+			(vgt_hidden_gm_sz(vgt) >> GTT_PAGE_SHIFT);
 		mm->page_table_entry_cnt = (gm_sz(pdev) >> GTT_PAGE_SHIFT);
 		mm->page_table_entry_size = mm->page_table_entry_cnt *
 			info->gtt_entry_size;
@@ -1559,6 +1609,17 @@ bool gen8_mm_alloc_page_table(struct vgt_mm *mm)
 			return false;
 		}
 		mm->virtual_page_table = mem;
+
+		mem = NULL;
+		mem = vzalloc(shadow_ggtt_pt_size);
+		if (!mem) {
+			vgt_err("fail to allocate shadow page table.\n");
+			return false;
+		}
+		/* per-vGPU shadow GGTT table, storing ptes of a vGPU's
+		 * hidden GM
+		 */
+		mm->shadow_page_table = mem;
 	}
 	return true;
 }
@@ -1571,6 +1632,8 @@ void gen8_mm_free_page_table(struct vgt_mm *mm)
 	} else if (mm->type == VGT_MM_GGTT) {
 		if (mm->virtual_page_table)
 			vfree(mm->virtual_page_table);
+		if (mm->shadow_page_table)
+			vfree(mm->shadow_page_table);
 	}
 	mm->virtual_page_table = mm->shadow_page_table = NULL;
 }
@@ -2186,24 +2249,54 @@ bool vgt_init_vgtt(struct vgt_device *vgt)
 
 	gtt->ggtt_mm = ggtt_mm;
 
+	/* current only gen8+ shadow ggtt is allocated*/
+	if (ggtt_mm->shadow_page_table) {
+		void *shadow_ggtt = ggtt_mm->shadow_page_table;
+		int i;
+
+		for (i = 0; i < (vgt_hidden_gm_sz(vgt) >> GTT_PAGE_SHIFT); i++)
+			*((u64 *)shadow_ggtt + i) =
+				vgt->pdev->dummy_gtt_entry.val64;
+	}
+
 	vgt_create_scratch_page(vgt);
 	return true;
 }
 
-void vgt_clean_vgtt(struct vgt_device *vgt)
+static void vgt_free_page_table(struct vgt_device *vgt,
+						vgt_mm_type_t type)
 {
 	struct list_head *pos, *n;
 	struct vgt_mm *mm;
 
-	ppgtt_free_all_shadow_page(vgt);
-	vgt_release_scratch_page(vgt);
-
 	list_for_each_safe(pos, n, &vgt->gtt.mm_list_head) {
 		mm = container_of(pos, struct vgt_mm, list);
-		vgt->pdev->gtt.mm_free_page_table(mm);
-		kfree(mm);
+		if (mm->type == type) {
+			vgt->pdev->gtt.mm_free_page_table(mm);
+			list_del(&mm->list);
+			kfree(mm);
+		}
 	}
+}
 
+#define ppgtt_free_all_guest_table(vgt)	\
+		vgt_free_page_table(vgt, VGT_MM_PPGTT)
+
+#define ggtt_free_all_guest_table(vgt)	\
+		vgt_free_page_table(vgt, VGT_MM_GGTT)
+
+void vgt_clean_ppgtt(struct vgt_device *vgt)
+{
+	ppgtt_free_all_shadow_page(vgt);
+
+	ppgtt_free_all_guest_table(vgt);
+}
+
+void vgt_clean_vgtt(struct vgt_device *vgt)
+{
+	vgt_release_scratch_page(vgt);
+	ggtt_free_all_guest_table(vgt);
+	vgt_clean_ppgtt(vgt);
 	execlist_ctx_table_destroy(vgt);
 
 	return;
@@ -2307,6 +2400,25 @@ void vgt_gtt_clean(struct pgt_device *pdev)
 	mempool_destroy(pdev->gtt.mempool);
 }
 
+
+u64 vgt_read_ggtt_pte(u32 vmid, u32 index)
+{
+	struct vgt_device *vgt;
+	struct pgt_device *pdev = &default_device;
+	struct vgt_gtt_pte_ops *ops = pdev->gtt.pte_ops;
+	gtt_entry_t gtt_entry;
+
+	vgt = vmid_2_vgt_device(vmid);
+	if (!vgt) {
+		vgt_err("Invalid domain ID (%d)\n", vmid);
+		return 0;
+	}
+	gtt_entry.pdev = vgt->pdev;
+	gtt_entry.type = GTT_TYPE_GGTT_PTE;
+	ops->get_entry(NULL, &gtt_entry, index, false, vgt);
+	return gtt_entry.val64;
+}
+
 int ring_ppgtt_mode(struct vgt_device *vgt, int ring_id, u32 off, u32 mode)
 {
 	vgt_state_ring_t *rb = &vgt->rb[ring_id];
@@ -2387,6 +2499,60 @@ struct vgt_mm *gen8_find_ppgtt_mm(struct vgt_device *vgt,
 	return NULL;
 }
 
+static bool is_same_ppgtt(struct vgt_device *vgt,
+			struct execlist_context *el_ctx, struct vgt_mm *mm);
+
+static int ppgtt_find_queued_ctx(struct vgt_device *vgt, struct vgt_mm *mm)
+{
+	int id;
+	int cnt = 0;
+
+	if (!vgt->pdev->enable_execlist)
+		return cnt;
+
+	for (id = 0 ; id < vgt->pdev->max_engines; id++) {
+		int tail;
+		int head;
+		struct vgt_exec_list *el_slots;
+		struct execlist_context *el_ctx;
+
+		if (!test_bit(id, vgt->enabled_rings))
+			continue;
+
+		el_slots = vgt->rb[id].execlist_slots;
+		tail = vgt_el_queue_tail(vgt, id);
+		head = vgt_el_queue_head(vgt, id);
+
+		for ( ; head != tail; head++) {
+			int j;
+
+			head %= EL_QUEUE_SLOT_NUM;
+			if (head == tail)
+				break;
+
+			if (el_slots[head].status != EL_PENDING)
+				continue;
+
+			for (j = 0; j < 2; j++) {
+				el_ctx = el_slots[head].el_ctxs[j];
+				if (!el_ctx)
+					continue;
+
+				if (is_same_ppgtt(vgt, el_ctx, mm)) {
+					el_ctx->lazy = true;
+					vgt_info("VM(%d): LRCA: 0x%x \n",
+						vgt->vm_id,
+						el_ctx->guest_context.lrca);
+					cnt++;
+				}
+			}
+		}
+
+	}
+	return cnt;
+}
+
+
 bool vgt_g2v_create_ppgtt_mm(struct vgt_device *vgt, int page_table_level)
 {
 	u64 *pdp = (u64 *)&__vreg64(vgt, vgt_info_off(pdp0_lo));
@@ -2414,6 +2580,7 @@ bool vgt_g2v_destroy_ppgtt_mm(struct vgt_device *vgt, int page_table_level)
 {
 	u64 *pdp = (u64 *)&__vreg64(vgt, vgt_info_off(pdp0_lo));
 	struct vgt_mm *mm;
+	int cnt = 0;
 
 	ASSERT(page_table_level == 4 || page_table_level == 3);
 
@@ -2423,6 +2590,21 @@ bool vgt_g2v_destroy_ppgtt_mm(struct vgt_device *vgt, int page_table_level)
 		return true;
 	}
 
+	if (atomic_read(&mm->refcount) <= 1) {
+		/*
+		 * Here we'll check if mm is still used by the pending ctx.
+		 * If find any one, we will mark this mm as pending release and
+		 * destroy this mm after not one uses it.
+		 */
+		cnt = ppgtt_find_queued_ctx(vgt, mm);
+		if (cnt) {
+			vgt_info("VM(%d):cnt (%d), pdp 0x%llx\n",
+					vgt->vm_id, cnt, pdp[0]);
+			/*still desrease the refcount here to ensure it's 0*/
+			atomic_dec(&mm->refcount);
+			return true;
+		}
+	}
 	vgt_destroy_mm(mm);
 
 	return true;
@@ -2527,42 +2709,55 @@ bool vgt_handle_guest_write_rootp_in_context(struct execlist_context *el_ctx, in
 	return rc;
 }
 
+/* compare the page table root pointer stored in guest context and
+*  in vgt_mm , return true if find
+*/
+static bool is_same_ppgtt(struct vgt_device *vgt,
+			struct execlist_context *el_ctx, struct vgt_mm *mm)
+{
+	bool rc = true;
+	struct reg_state_ctx_header *g_state;
+	gtt_entry_t ctx_rootp;
+	gtt_entry_t pt_ctx_rootp;
+	int i;
+
+	if (!mm)
+		return false;
+
+	g_state = (struct reg_state_ctx_header *)
+		el_ctx->ctx_pages[1].guest_page.vaddr;
+
+	for (i = 0; i < mm->page_table_entry_cnt; ++i) {
+		ppgtt_get_rootp_from_ctx(g_state, &ctx_rootp, i);
+		ppgtt_get_guest_root_entry(mm, &pt_ctx_rootp, i);
+
+		if (ctx_rootp.val64 != pt_ctx_rootp.val64)
+			break;
+	}
+
+	if (i != mm->page_table_entry_cnt)
+		rc = false;
+
+	return rc;
+}
+
 /* ppgtt : ppgtt sync-up between guest/shadow */
 
 bool ppgtt_update_shadow_ppgtt_for_ctx(struct vgt_device *vgt,
 				struct execlist_context *el_ctx)
 {
 	bool rc = true;
-	struct reg_state_ctx_header *g_state;
 	struct vgt_mm *mm = el_ctx->ppgtt_mm;
-	gtt_entry_t ctx_rootp;
-	gtt_entry_t pt_ctx_rootp;
-	int i;
 
 	if (!vgt_require_shadow_context(vgt))
 		return rc;
 
-	g_state = (struct reg_state_ctx_header *)
-					el_ctx->ctx_pages[1].guest_page.vaddr;
 	/* compare the page table root pointer stored in guest context and
 	 * in shadow page table, update the mapping if it is not aligned
 	 */
-	if (mm) {
-		for (i = 0; i < el_ctx->ppgtt_mm->page_table_entry_cnt; ++ i) {
-			ppgtt_get_rootp_from_ctx(g_state, &ctx_rootp, i);
-			ppgtt_get_guest_root_entry(mm, &pt_ctx_rootp, i);
-
-			if (ctx_rootp.val64 != pt_ctx_rootp.val64)
-				break;
-		}
-
-		if (i != el_ctx->ppgtt_mm->page_table_entry_cnt) {
-			if (vgt_el_create_shadow_ppgtt(vgt, el_ctx->ring_id, el_ctx))
-				rc = false;
-		}
-	} else {
+	if (!mm || !is_same_ppgtt(vgt, el_ctx, mm))
 		if (vgt_el_create_shadow_ppgtt(vgt, el_ctx->ring_id, el_ctx))
 			rc = false;
-	}
+
 	return rc;
 }

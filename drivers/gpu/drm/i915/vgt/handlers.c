@@ -303,6 +303,13 @@ static bool handle_device_reset(struct vgt_device *vgt, unsigned int offset,
 	set_bit(RESET_INPROGRESS, &vgt->reset_flags);
 
 	clear_bit(WAIT_RESET, &vgt->reset_flags);
+	if (!test_bit(HW_RESET, &vgt->reset_flags)) {
+		test_and_set_bit(VM_RESET, &vgt->reset_flags);
+		vgt_info("guest trigger tdr first\n");
+	} else {
+		clear_bit(HW_RESET, &vgt->reset_flags);
+		vgt_info("hw tdr reset first\n");
+	}
 
 	vgt_reset_virtual_states(vgt, ring_bitmap);
 
@@ -343,28 +350,20 @@ static bool handle_device_reset(struct vgt_device *vgt, unsigned int offset,
 			vgt_info("VM %d: lock again afterforce removal event\n",
 					vgt->vm_id);
 
-
 		}
 
 		/*clean up during reset */
 		if (test_and_clear_bit(RESET_INPROGRESS, &vgt->reset_flags)) {
-
 			vgt_info("VM %d: vgt_clean_up begin.\n", vgt->vm_id);
 
 			/*unlock first, may sleep @ vfree in vgt_clean_vgtt*/
 			spin_unlock(&vgt->pdev->lock);
-			vgt_clean_vgtt(vgt);
-			vgt_clear_gtt(vgt);
-			state_sreg_init(vgt);
-			state_vreg_init(vgt);
+			vgt_clean_ppgtt(vgt);
+			execlist_ctx_table_destroy(vgt);
 			state_dpy_reg_init(vgt);
-			vgt_init_vgtt(vgt);
-
-			vgt_info("VM %d: vgt_clean_up end.\n", vgt->vm_id);
-
 			spin_lock(&vgt->pdev->lock);
 
-			vgt_info("VM %d: lock.again\n", vgt->vm_id);
+			vgt_info("VM %d: vgt_clean_up end.\n", vgt->vm_id);
 		}
 	}
 
@@ -784,7 +783,7 @@ static bool ring_pp_mode_write(struct vgt_device *vgt, unsigned int off,
 
 	/* check if guest is trying to enable GuC */
 	if (GFX_MODE_BIT_SET_IN_MASK(mode, GFX_INTERRUPT_STEERING)) {
-		WARN_ONCE(1, "VM(%d): should send interrupt message to display engine instead of on-chip micro controller.\n",
+		vgt_info("VM(%d): should send interrupt message to display engine instead of on-chip micro controller.\n",
 				vgt->vm_id);
 		return true;
 	}
@@ -2809,6 +2808,13 @@ static bool vgt_reg_write_flash_tlb_handler(struct vgt_device *vgt, unsigned int
 	return rc;
 }
 
+static bool mbctl_write(struct vgt_device *vgt, unsigned int offset,
+			void *p_data, unsigned int bytes)
+{
+	*(u32 *)p_data &= ~0x10;
+	return default_mmio_write(vgt, offset, p_data, bytes);
+}
+
 static bool vgt_reg_write_misc_ctl_handler(struct vgt_device *vgt, unsigned int offset,
 			void *p_data, unsigned int bytes)
 {
@@ -3589,7 +3595,7 @@ reg_attr_t vgt_reg_info_general[] = {
 {0x7180, 4, F_VIRT, 0, D_ALL, NULL, NULL},
 {0x7408, 4, F_VIRT, 0, D_ALL, NULL, NULL},
 {0x7c00, 4, F_VIRT, 0, D_ALL, NULL, NULL},
-{GEN6_MBCTL, 4, F_VIRT, 0, D_ALL, NULL, NULL},
+{GEN6_MBCTL, 4, F_VIRT, 0, D_ALL, NULL, mbctl_write},
 {0x911c, 4, F_VIRT, 0, D_ALL, NULL, NULL},
 {0x9120, 4, F_VIRT, 0, D_ALL, NULL, NULL},
 

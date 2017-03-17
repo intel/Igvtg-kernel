@@ -150,6 +150,16 @@
 		return INV;						\
 	} } while (0)
 
+#define MIG_VREG_RESTORE(reg)						\
+	{								\
+		u32 data = __vreg(vgt, (reg));				\
+		u64 pa = vgt_mmio_offset_to_pa(vgt, (reg));		\
+		if (reg_mode_ctl(pdev, (reg))) {			\
+			data |= 0xFFFF0000;				\
+		}							\
+		vgt_emulate_write(vgt, pa, &data, 4);			\
+	}
+
 static int default_save(const vgt_migration_obj_t *obj);
 static int default_load(const vgt_migration_obj_t *obj);
 static int image_header_save(const vgt_migration_obj_t *obj);
@@ -287,6 +297,24 @@ update_image_region_size_and_pos(vgt_migration_obj_t *obj, int size)
 		update_image_region_end_pos(obj, obj->img.offset + size);
 }
 
+static void
+migration_restore_pipe(struct vgt_device *vgt, enum pipe pipe)
+{
+	struct pgt_device *pdev;
+
+	pdev = vgt->pdev;
+
+	/*primary plane, sprite plane, cursor plane and pipe conf*/
+	MIG_VREG_RESTORE(VGT_DSPCNTR(pipe));
+	MIG_VREG_RESTORE(VGT_DSPSTRIDE(pipe));
+	MIG_VREG_RESTORE(VGT_DSPSURF(pipe));
+	MIG_VREG_RESTORE(VGT_DSPTILEOFF(pipe));
+	MIG_VREG_RESTORE(VGT_CURPOS(pipe));
+	MIG_VREG_RESTORE(VGT_CURCNTR(pipe));
+	MIG_VREG_RESTORE(VGT_CURBASE(pipe));
+	MIG_VREG_RESTORE(VGT_PIPECONF(pipe));
+}
+
 /* Handle migration tag for each member of struct vgt_device
  * Each member in struct vgt_device carry on certain vGPU state information.
  *
@@ -350,10 +378,12 @@ static struct vgt_migration_obj_t vgt_device_rules[] = {
 			state.sReg, VGT_MMIO_SPACE_SZ, default_ops),
 	MIGRATION_UNIT(struct vgt_device,
 			rb, vgt_state_ring_t[MAX_ENGINES], default_ops),
-	MIGRATION_UNIT(struct vgt_device,
-			state.cfg_space, u8[VGT_CFG_SPACE_SZ], vcfg_space_ops),
 	MIGRATION_FIXSIZE_BUF(struct vgt_device,
 			state.opregion_va, VGT_OPREGION_SIZE, default_ops),
+	MIGRATION_UNIT(struct vgt_device,
+			state.cfg_space, u8[VGT_CFG_SPACE_SZ], vcfg_space_ops),
+	MIGRATION_UNIT(struct vgt_device,
+			low_mem_max_gpfn, unsigned long, default_ops),
 
 	/* Image header always put to last, till now we know actual data size */
 	MIGRATION_TAG(struct vgt_device,
@@ -571,16 +601,6 @@ static int default_load(const vgt_migration_obj_t *obj)
 	return n_transfer;
 }
 
-#define MIG_VREG_RESTORE(reg)						\
-	{								\
-		u32 data = __vreg(vgt, (reg));				\
-		u64 pa = vgt_mmio_offset_to_pa(vgt, (reg));		\
-		if (reg_mode_ctl(pdev, (reg))) {			\
-			data |= 0xFFFF0000;				\
-		}							\
-		vgt_emulate_write(vgt, pa, &data, 4);			\
-	}
-
 static int vports_load(const vgt_migration_obj_t *obj)
 {
 	struct vgt_device *vgt = (struct vgt_device *) obj->mem.base;
@@ -614,6 +634,7 @@ static int vReg_load(const vgt_migration_obj_t *obj)
 	struct vgt_device *vgt = (struct vgt_device *) obj->mem.base;
 	struct pgt_device *pdev = vgt->pdev;
 	int n_transfer = INV;
+	enum pipe pipe;
 
 	FUNC_ENTER;
 	VALID_BASE(obj);
@@ -643,12 +664,6 @@ static int vReg_load(const vgt_migration_obj_t *obj)
 	if ((IS_BDWGT3(pdev) || IS_SKLGT3(pdev) || IS_SKLGT4(pdev)))
 		MIG_VREG_RESTORE(_REG_VCS2_MFX_MODE_BDW);
 
-	/*Restore Display pipe_conf regsiters */
-	MIG_VREG_RESTORE(_PIPEACONF);
-	MIG_VREG_RESTORE(_REG_PIPEBCONF);
-	MIG_VREG_RESTORE(_REG_PIPECCONF);
-	MIG_VREG_RESTORE(_REG_PIPE_EDP_CONF);
-
 	/*Restore PAT index */
 	MIG_VREG_RESTORE(GEN8_PRIVATE_PAT_LO);
 	MIG_VREG_RESTORE(GEN8_PRIVATE_PAT_HI);
@@ -656,6 +671,14 @@ static int vReg_load(const vgt_migration_obj_t *obj)
 	/*Restore snoop control reg*/
 	MIG_VREG_RESTORE(GEN6_MBCUNIT_SNPCR);
 	MIG_VREG_RESTORE(GEN7_MISCCPCTL);
+
+	/*Restore pipe A, B and C*/
+	for (pipe = PIPE_A; pipe < I915_MAX_PIPES; ++pipe) {
+		migration_restore_pipe(vgt, pipe);
+	}
+
+	/*Restore pipe edp*/
+	MIG_VREG_RESTORE(_REG_PIPE_EDP_CONF);
 
 	/* !!! */
 	spin_lock(&pdev->lock);

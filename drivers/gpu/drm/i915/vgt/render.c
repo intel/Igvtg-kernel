@@ -27,6 +27,7 @@
 #include <linux/kthread.h>
 #include <linux/delay.h>
 #include "vgt.h"
+#include "trace.h"
 
 /*
  * NOTE list:
@@ -215,7 +216,6 @@ vgt_reg_t vgt_gen9_render_regs[] = {
 	GEN8_PRIVATE_PAT_LO,
 	GEN8_PRIVATE_PAT_HI,
 
-	0x7004,
 	0x2580,
 	COMMON_SLICE_CHICKEN2,
 	0x7300,
@@ -269,6 +269,11 @@ vgt_reg_t vgt_gen9_render_regs[] = {
 
 	0x4ab0,
 	0x20d4,
+	0xb004,
+	CACHE_MODE_0_GEN7,
+	CACHE_MODE_1,
+	0x20a0,
+	0x20e4,
 };
 
 static vgt_reg_t *vgt_get_extra_ctx_regs(void)
@@ -585,27 +590,8 @@ static bool gen8plus_ring_switch(struct pgt_device *pdev,
 	 */
 	if (render_engine_reset) {
 
-		VGT_MMIO_WRITE(pdev, 0x20d0, (1 << 16) | (1 << 0));
-
-		for (count = 1000; count > 0; count --)
-			if (VGT_MMIO_READ(pdev, 0x20d0) & (1 << 1))
-				break;
-
-		if (!count) {
-			vgt_err("wait 0x20d0 timeout.\n");
+		if (!vgt_do_engine_reset(pdev, ring_id))
 			return false;
-		}
-
-		VGT_MMIO_WRITE(pdev, GEN6_GDRST, GEN6_GRDOM_RENDER);
-
-		for (count = 1000; count > 0; count --)
-			if (!(VGT_MMIO_READ(pdev, GEN6_GDRST) & GEN6_GRDOM_RENDER))
-				break;
-
-		if (!count) {
-			vgt_err("wait gdrst timeout.\n");
-			return false;
-		}
 
 		VGT_MMIO_WRITE(pdev, IMR, __sreg(vgt_dom0, IMR));
 	}
@@ -626,12 +612,169 @@ static bool gen8plus_ring_switch(struct pgt_device *pdev,
 	return true;
 }
 
+void vgt_restore_hidden_gm(struct vgt_device *vgt)
+{
+	struct pgt_device *pdev = vgt->pdev;
+	int idx;
+
+	struct vgt_mm *ggtt_mm = vgt->gtt.ggtt_mm;
+	struct vgt_gtt_pte_ops *ops = pdev->gtt.pte_ops;
+
+	/* if a vGPU is not sharing high gm,
+	 * physical GGTT already has its own ptes
+	 */
+	if (!vgt->share_hidden_gm)
+		return;
+
+	if (!ggtt_mm || !ggtt_mm->shadow_page_table)
+		return;
+
+	/* restore the per-VM GGTT entries for current render owner */
+	for (idx = 0; idx < vgt->hidden_gm_slot_num; idx++) {
+		int i;
+		struct hidden_gm_slot *slot =
+			vgt_hidden_gm_slotidx_to_slot(vgt, idx);
+
+		/* if slot is already owned by the vGPU to switch in,
+		 * no need to restore,
+		 * since physcial GGTT already contains ptes of this vGPU
+		 */
+		if (slot->owner == vgt)
+			continue;
+
+		/* restore PTEs for the slot */
+		for (i = 0; i < VGT_HIGHGM_PER_SLOT_PAGE_NUM ; i++) {
+			gtt_entry_t gtt_entry;
+			unsigned long gtt_idx =
+				vgt_highgm_slot_idx_to_page_idx(vgt, idx) + i;
+
+			gtt_entry.pdev = vgt->pdev;
+			gtt_entry.type = GTT_TYPE_GGTT_PTE;
+
+			/* read from shadow GGTT */
+			ops->get_entry(NULL, &gtt_entry, gtt_idx, false,
+				vgt);
+			/* write to physical GGTT */
+			ops->set_entry(NULL, &gtt_entry, gtt_idx, false,
+				NULL);
+		}
+
+		/* set current VM as slot owner */
+		slot->owner = vgt;
+	}
+}
+
+static bool is_subunits_stuck(struct pgt_device *pdev)
+{
+	if ((pdev->instdone[0] == 0xfffffffe) &&
+		(pdev->instdone[1] == 0xffffffff) &&
+		(pdev->instdone[2] == 0xffffffff) &&
+		(pdev->instdone[3] == 0xffffffff))
+
+		return false;
+	else
+		return true;
+
+}
+
+static void vgt_get_extra_instdone(struct pgt_device *pdev, uint32_t *instdone)
+{
+	memset(instdone, 0, sizeof(*instdone) * I915_NUM_INSTDONE_REG);
+
+	instdone[0] = VGT_MMIO_READ(pdev, RING_INSTDONE(RENDER_RING_BASE));
+	instdone[1] = VGT_MMIO_READ(pdev, GEN7_SC_INSTDONE);
+	instdone[2] = VGT_MMIO_READ(pdev, GEN7_SAMPLER_INSTDONE);
+	instdone[3] = VGT_MMIO_READ(pdev, GEN7_ROW_INSTDONE);
+}
+
+static bool subunits_stuck(struct pgt_device *pdev, int ring_id)
+{
+	u32 instdone[I915_NUM_INSTDONE_REG];
+	bool stuck;
+	int i;
+
+	if (ring_id != RING_BUFFER_RCS)
+		return true;
+
+	vgt_get_extra_instdone(pdev, instdone);
+
+	/* There might be unstable subunit states even when
+	* actual head is not moving. Filter out the unstable ones by
+	* accumulating the undone -> done transitions and only
+	* consider those as progress.
+	*/
+	stuck = true;
+	for (i = 0; i < I915_NUM_INSTDONE_REG; i++) {
+		const u32 tmp = instdone[i] | pdev->instdone[i];
+
+		if (tmp != pdev->instdone[i]) {
+			stuck = false;
+			vgt_dbg(VGT_DBG_RENDER,
+				"ring(%d)instdone[%d](%x) pdev->instdone[%d](%x)\n",
+				ring_id, i, instdone[i],
+				i, pdev->instdone[i]);
+	}
+
+	pdev->instdone[i] |= tmp;
+	}
+
+	return stuck;
+}
+
+static void vgt_inject_sanitized_irq(struct vgt_device *vgt)
+{
+	int id, v_event;
+	char str[128];
+
+	if (test_and_clear_bit(GT_RENDER_PIPECTL_NOTIFY_INTERRUPT,
+			(void *)&vgt->rb[RING_BUFFER_RCS].request_irq)) {
+
+		snprintf(str, 128, "inject RCS_PIPE_CTRL to VM%d\n",
+						 vgt->vm_id);
+		trace_irq_lifecycle(str);
+		vgt_trigger_virtual_event(vgt, RCS_PIPE_CONTROL);
+	}
+
+	for(id = 0; id < vgt->pdev->max_engines; id++) {
+		if (test_and_clear_bit(GT_RENDER_USER_INTERRUPT,
+					(void *)&vgt->rb[id].request_irq)) {
+			char str[128];
+			switch (id) {
+				case RING_BUFFER_RCS:
+					v_event = RCS_MI_USER_INTERRUPT;
+					break;
+				case RING_BUFFER_VCS:
+					v_event = VCS_MI_USER_INTERRUPT;
+					break;
+				case RING_BUFFER_VCS2:
+					v_event = VCS2_MI_USER_INTERRUPT;
+					break;
+				case RING_BUFFER_BCS:
+					v_event = BCS_MI_USER_INTERRUPT;
+					break;
+				case RING_BUFFER_VECS:
+					v_event = VECS_MI_USER_INTERRUPT;
+					break;
+				default:
+					return;
+			}
+
+			snprintf(str, 128, "inject event%s to VM%d\n",
+					 vgt_irq_name[v_event], vgt->vm_id);
+			trace_irq_lifecycle(str);
+			vgt_trigger_virtual_event(vgt, v_event);
+		}
+	}
+}
+
 bool vgt_do_render_context_switch(struct pgt_device *pdev)
 {
 	int i = 0;
 	int cpu;
 	struct vgt_device *next, *prev;
 	cycles_t t0, t1, t2;
+	int ring_id;
+	bool ret = false;
 
 	vgt_lock_dev(pdev, cpu);
 	if (!ctx_switch_requested(pdev))
@@ -660,33 +803,76 @@ bool vgt_do_render_context_switch(struct pgt_device *pdev)
 
 	if (pdev->enable_execlist) {
 		static int check_cnt = 0;
-		int ring_id;
+		static vgt_reg_t last_acthd;
+		static u32 subunit_hang_cnt;
+		#define SUBUNIT_CHECK_CNT 10
+		#define MAX_SUBUNIT_HANG_CNT (SUBUNIT_CHECK_CNT - 3)
+
 		for (ring_id = 0; ring_id < pdev->max_engines; ++ ring_id) {
 			if (!pdev->ring_buffer[ring_id].need_switch)
 				continue;
 			if (!vgt_idle_execlist(pdev, ring_id)) {
 				vgt_dbg(VGT_DBG_EXECLIST, "rendering ring is not idle. "
 					"Ignore the context switch!\n");
-				check_cnt++;
-				vgt_force_wake_put();
 
-				if (check_cnt > 500 && !idle_rendering_engines(pdev, &i)) {
-					vgt_err("vGT: (%lldth switch<%d>)...ring(%d) is busy\n",
-						vgt_ctx_switch(pdev),
-					current_render_owner(pdev)->vgt_id, i);
-					goto err;
+				if (!check_cnt) {
+					last_acthd = VGT_MMIO_READ(pdev,
+								VGT_ACTHD(ring_id));
+					memset(pdev->instdone, 0, sizeof(pdev->instdone));
+					subunit_hang_cnt = 0;
 				}
 
+				check_cnt++;
+
+				if (check_cnt <= hang_threshold) {
+					vgt_reg_t current_acthd;
+
+					current_acthd = VGT_MMIO_READ(pdev,
+								VGT_ACTHD(ring_id));
+					if (current_acthd != last_acthd) {
+						check_cnt = 0;
+					} else if (check_cnt%(hang_threshold/SUBUNIT_CHECK_CNT) == 0) {
+						if (subunits_stuck(pdev, ring_id)) {
+							subunit_hang_cnt++;
+						}
+					}
+					last_acthd = current_acthd;
+				}
+
+				if (check_cnt == hang_threshold) {
+					check_cnt = 0;
+					if ((subunit_hang_cnt >= MAX_SUBUNIT_HANG_CNT)
+						&& is_subunits_stuck(pdev)) {
+						vgt_err("vGT:(%lldth switch<%d>) ring(%d) is busy, subunit_hang_cnt %d\n",
+							vgt_ctx_switch(pdev),
+							current_render_owner(pdev)->vgt_id,
+							i, subunit_hang_cnt);
+
+						set_bit(HW_RESET, &prev->reset_flags);
+						if (!test_bit(VM_RESET, &prev->reset_flags)) {
+							vgt_info("guest not trigger tdr yet\n");
+							/*enable render after VM reset by Guest*/
+							vgt_disable_render(prev);
+						}
+
+					goto err;
+					}
+				}
+
+				vgt_force_wake_put();
 				goto out;
 			}
+
+			clear_bit(VM_RESET, &prev->reset_flags);
+			clear_bit(HW_RESET, &prev->reset_flags);
 			vgt_clear_submitted_el_record(pdev, ring_id);
 		}
 
 		check_cnt = 0;
 	}
 
-	vgt_dbg(VGT_DBG_RENDER, "vGT: next vgt (%d)\n", next->vgt_id);
-	
+	trace_vm_switch(prev->vm_id, next->vm_id);
+	vgt_inject_sanitized_irq(prev);
 
 	/* variable exported by debugfs */
 	pdev->stat.context_switch_num ++;
@@ -716,6 +902,7 @@ bool vgt_do_render_context_switch(struct pgt_device *pdev)
 		else
 			gen8plus_ring_switch(pdev, i, prev, next);
 	}
+	vgt_restore_hidden_gm(next);
 
 	/* STEP-3: manually restore render context */
 	vgt_rendering_restore_mocs(prev, next);
@@ -760,9 +947,9 @@ bool vgt_do_render_context_switch(struct pgt_device *pdev)
 	pdev->stat.context_switch_cost += (t2-t1);
 out:
 	vgt_unlock_dev(pdev, cpu);
-	return true;
+	ret = true;
+	return ret;
 err:
-	dump_regs_on_err(pdev);
 	/* TODO: any cleanup for context switch errors? */
 	vgt_err("Ring-%d: (%lldth checks %lldth switch<%d->%d>)\n",
 			i, vgt_ctx_check(pdev), vgt_ctx_switch(pdev),
@@ -782,10 +969,28 @@ err:
 	show_ring_debug(pdev, i);
 	show_ring_buffer(pdev, i, 16 * sizeof(vgt_reg_t));
 	pdev->cur_reset_vm = NULL;
-	if (!enable_reset)
+	if (!enable_reset) {
+		/*
+		* the time-consuming debug dump information with lock held
+		* will block other VMs running and trigger other VMs TDR.
+		* disable it in reset path.
+		*/
+		dump_regs_on_err(pdev);
 		/* crash system now, to avoid causing more confusing errors */
 		ASSERT(0);
+	}
 
+	if (pdev->enable_execlist) {
+		if (vgt_do_engine_reset(pdev, ring_id)) {
+			VGT_MMIO_WRITE(pdev, IMR, __sreg(vgt_dom0, IMR));
+			reset_phys_el_structure(pdev, ring_id);
+			vgt_info("the %d ring reset done.\n", ring_id);
+			ret = true;
+		} else {
+			vgt_info("the %d ring reset fail.\n", ring_id);
+			ret = false;
+		}
+	}
 	/*
 	 * put this after the ASSERT(). When ASSERT() tries to dump more
 	 * CPU/GPU states: we want to hold the lock to prevent other
@@ -795,5 +1000,5 @@ err:
 
 	vgt_unlock_dev(pdev, cpu);
 
-	return false;
+	return ret;
 }

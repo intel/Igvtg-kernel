@@ -1186,6 +1186,22 @@ static bool xen_write_va(struct vgt_device *vgt, void *va, void *val,
 	return true;
 }
 
+static bool xen_pre_migrate(struct vgt_device *vgt)
+{
+	if (hvm_toggle_iorequest_server(vgt, false) > 0)
+		return true;
+	else
+		return false;
+}
+
+static bool xen_post_migrate(struct vgt_device *vgt)
+{
+	if (hvm_toggle_iorequest_server(vgt, true) > 0)
+		return true;
+	else
+		return false;
+}
+
 static struct kernel_dm xengt_kdm = {
 	.name = "xengt_kdm",
 	.g2m_pfn = xen_g2m_pfn,
@@ -1204,6 +1220,8 @@ static struct kernel_dm xengt_kdm = {
 	.gpa_to_va = xen_gpa_to_va,
 	.read_va = xen_read_va,
 	.write_va = xen_write_va,
+	.pre_migrate = xen_pre_migrate,
+	.post_migrate = xen_post_migrate,
 };
 EXPORT_SYMBOL(xengt_kdm);
 

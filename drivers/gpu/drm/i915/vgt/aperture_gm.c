@@ -200,15 +200,188 @@ ssize_t get_avl_vm_aperture_gm_and_fence(struct pgt_device *pdev, char *buf,
 	return buf_len;
 }
 
+/**
+ * search hidden gm slots for a vGPU
+ *
+ * Physical hidden GM is partitioned into 64M-sized slots. Each vGPU can
+ * take several contiguous slots to serve as a piece of continuous hidden
+ * graphics memory.
+ *
+ * In this algorithm, if a vGPU is not willing to share slots with other
+ * vGPUs, it will search from @start to @end for @nr_slots contigous slots
+ * that are not yet taken by other vGPUs, i.e.,
+ * slot->current_vgpu_num is 0;
+ *
+ * If a vGPU is willing to share slots with other vGPUs, it will search
+ * from @start to @end for @nr_slots contigous slots which are least
+ * shared with other vGPUs.
+ * In order to find such contigous slots, a score is calculated for each
+ * search. After Nth search, (N <= end - start - nr_slots + 1), slots
+ * with the lowest score is found, which means those slots are current
+ * least shared available. Then the index of the first slot of the found
+ * slots is returned @index_found.
+ *
+ * An example for this algorithm is like this:
+ * Suppose a vGPU is going to take 384M hidden GM, i.e. 6 hidden GM slots,
+ * and total physical hidden GM is 3G, i.e., 48 slots.
+ * First, score for slots 0-5 is calculated, then slots 1-6, 2-7, ...,
+ * 42-47. slots with least score are chosen.
+ *
+ * The algorithm to calculate score is like this:
+ * On the start of each search, score is set to 0.
+ * 1. if a slot is not taken by any vGPU yet, so after it's chosen, no pte
+ * copy is required. 0 is added to the score;
+ * 2. if a slot is already taken by N vGPUs, so after it's chosen, ptes of
+ * this slot are demanding for copy during context switch, therefore a
+ * "weight" is added to the score. The "weight" is deliberately set to a
+ * very large value to ensure that less slots shared is always favored.
+ * After that, we add a fine-grained N to the score for balance
+ * consideration. E.g.
+ * suppose weight = 1024, and it is found that
+ * a ) there are 6 slots taken by 1 1 1 1 1 1 vGPUs, then for the 6 slots,
+ * score = 1024 * 6 + 6 = 6150;
+ * b ) there are 6 slots taken by 0 0 0 0 0 6 vGPUs, which means the first
+ * 5 slots are not taken by any vGPUs, and the last slot is taken by 6 slots
+ * already, then score = 1024 + 6 = 1030.
+ * The lower score means the less ptes need to be copied for GGTT during
+ * context switch, and therefore is preferred.
+ *
+ * @vgt: structure for the target vGPU
+ * @nr_slots: total count of hidden gm slots the vGPU is going to take
+ * @start: an index that specifies from which slot to search from.
+ * @end: an index that specifies to which slot the search is end.
+ *	Usually it's the index of the last slot in hidden gm.
+ * @index_found: return the slot index found.
+ *	This index is the slot index of the vGPU's hidden GM base address
+ */
+
+static int vgt_find_hidden_gm_slots(struct vgt_device *vgt,
+	unsigned int nr_slots, unsigned int start, unsigned int end,
+	unsigned int *index_found)
+{
+	struct pgt_device *pdev = vgt->pdev;
+	unsigned int weight = VGT_HIGHGM_SLOT_MAX_NUM * VGT_MAX_VMS;
+	unsigned int min_score = -1U;
+
+	ASSERT(start < VGT_HIGHGM_SLOT_MAX_NUM);
+	ASSERT(end < VGT_HIGHGM_SLOT_MAX_NUM);
+
+	*index_found = start;
+	end = end - nr_slots + 1;
+
+	if (start > end)
+		return -ENOMEM;
+
+	while (start <= end) {
+		int i;
+		unsigned int score = 0;
+
+		for (i = 0; i < nr_slots; i++) {
+			struct hidden_gm_slot *slot =
+				hidden_gm_slotidx_to_slot(pdev, start + i);
+
+			ASSERT(slot->current_vgpu_num <=
+				slot->max_vgpu_num);
+
+			/* slot is full or refuse to be taken, go to next
+			 * one
+			 */
+			if (slot->current_vgpu_num == slot->max_vgpu_num)
+				break;
+
+			/* weight is deliberately set to a very large value
+			 * to ensure that less slots shared is favored.
+			 * if a slot is not taken by any vGPU yet, none pte
+			 * copies are required. So 0 is added to the score;
+			 * if a slot is already taken by "N" vGPUs, ptes
+			 * copies are required, so weight is added to the
+			 * score. After that, a fine-grained "N" is added
+			 * for balance consideration.
+			 */
+			score += slot->current_vgpu_num;
+			if (slot->current_vgpu_num)
+				score += weight;
+
+			/* if the vGPU is not willing to share high gm with
+			 * others, only find N contiguous empty slots
+			 */
+			if (!vgt->share_hidden_gm && score)
+				break;
+		}
+		if (i < nr_slots) {
+			/* no suitable slots, go to next slot or return
+			 * failure
+			 */
+			start += i + 1;
+
+			if (start > end)
+				return -ENOMEM;
+
+			continue;
+		}
+
+		if (score < min_score) {
+			min_score = score;
+			*index_found = start;
+		}
+		if (score == 0)
+			break;
+
+		start++;
+
+	}
+	return 0;
+}
+
+static int allocate_hidden_gm(struct vgt_device *vgt,
+	int size_in_mb, unsigned long *hidden_gm_start)
+{
+	struct pgt_device *pdev = vgt->pdev;
+	int i;
+
+	size_in_mb = (size_in_mb + VGT_HIGHGM_SLOT_SZ - 1) &
+			(VGT_HIGHGM_SLOT_MASK);
+	vgt->hidden_gm_slot_num = size_in_mb / VGT_HIGHGM_SLOT_SZ;
+
+	if (vgt_find_hidden_gm_slots(vgt,
+			vgt->hidden_gm_slot_num,
+			0,
+			hidden_gm_sz(pdev)/
+				(VGT_HIGHGM_SLOT_SZ*SIZE_1MB) - 1,
+			&vgt->hidden_gm_slot_start_idx))
+		return -ENOMEM;
+
+	*hidden_gm_start = hidden_gm_base(pdev)/SIZE_1MB +
+		vgt->hidden_gm_slot_start_idx * VGT_HIGHGM_SLOT_SZ;
+
+	for (i = 0; i < vgt->hidden_gm_slot_num; i++) {
+		struct hidden_gm_slot *slot =
+			vgt_hidden_gm_slotidx_to_slot(vgt, i);
+
+		slot->current_vgpu_num++;
+		if (!vgt->share_hidden_gm) {
+			slot->max_vgpu_num = 1;
+			/* if a slot is not shared, then its owner can be
+			 * determined here, while if it's shared, its owner
+			 * will be determined when a vGPU becomes a render
+			 * owner
+			 */
+			slot->owner = vgt;
+		}
+	}
+
+	vgt_info("vgt-%d hidden memory from %ldM, size %dM, %s shared\n",
+		vgt->vm_id, *hidden_gm_start, size_in_mb,
+		vgt->share_hidden_gm ? "" : "not");
+	return 0;
+}
+
 int allocate_vm_aperture_gm_and_fence(struct vgt_device *vgt, vgt_params_t vp)
 {
 	struct pgt_device *pdev = vgt->pdev;
-	struct vgt_device_info *info = &pdev->device_info;
-
 	unsigned long *gm_bitmap = pdev->gm_bitmap;
 	unsigned long *fence_bitmap = pdev->fence_bitmap;
 	unsigned long guard = hidden_gm_base(vgt->pdev)/SIZE_1MB;
-	unsigned long gm_bitmap_total_bits = info->max_gtt_gm_sz >> 20;
 	unsigned long aperture_search_start = 0;
 	unsigned long visable_gm_start, hidden_gm_start = guard;
 	unsigned long fence_base;
@@ -231,9 +404,10 @@ int allocate_vm_aperture_gm_and_fence(struct vgt_device *vgt, vgt_params_t vp)
 		return -ENOMEM;
 
 	if (vp.gm_sz > vp.aperture_sz) {
-		hidden_gm_start = bitmap_find_next_zero_area(gm_bitmap,
-				gm_bitmap_total_bits, guard, vp.gm_sz - vp.aperture_sz, 0);
-		if (hidden_gm_start >= gm_bitmap_total_bits)
+		int hidden_gm_sz = vp.gm_sz - vp.aperture_sz;
+
+		if (allocate_hidden_gm(vgt, hidden_gm_sz,
+			&hidden_gm_start))
 			return -ENOMEM;
 	}
 	fence_base = bitmap_find_next_zero_area(fence_bitmap,
@@ -251,8 +425,10 @@ int allocate_vm_aperture_gm_and_fence(struct vgt_device *vgt, vgt_params_t vp)
 
 	/* mark the related areas as BUSY. */
 	bitmap_set(gm_bitmap, visable_gm_start, vp.aperture_sz);
-	if (vp.gm_sz > vp.aperture_sz)
+	if ((vp.gm_sz > vp.aperture_sz) && !vgt->share_hidden_gm) {
+		/* only mark non-shared hidden gm space in bitmap*/
 		bitmap_set(gm_bitmap, hidden_gm_start, vp.gm_sz - vp.aperture_sz);
+	}
 	bitmap_set(fence_bitmap, fence_base, vp.fence_sz);
 
 	for (i = vgt->fence_base; i < vgt->fence_base + vgt->fence_sz; i++){
@@ -285,6 +461,16 @@ void free_vm_aperture_gm_and_fence(struct vgt_device *vgt)
 		VGT_MMIO_WRITE_BYTES(pdev,
 			_REG_FENCE_0_LOW + 8 * i,
 			0, 8);
+	}
+
+	for (i = 0; i < vgt->hidden_gm_slot_num; i++) {
+		struct hidden_gm_slot *slot =
+			vgt_hidden_gm_slotidx_to_slot(vgt, i);
+
+		slot->current_vgpu_num--;
+		if (!slot->current_vgpu_num)
+			slot->owner = NULL;
+		slot->max_vgpu_num = VGT_MAX_VMS;
 	}
 }
 
@@ -345,6 +531,7 @@ void initialize_gm_fence_allocation_bitmaps(struct pgt_device *pdev)
 {
 	struct vgt_device_info *info = &pdev->device_info;
 	unsigned long *gm_bitmap = pdev->gm_bitmap;
+	int i;
 
 	vgt_info("total aperture: 0x%llx bytes, total GM space: 0x%llx bytes\n",
 		phys_aperture_sz(pdev), gm_sz(pdev));
@@ -353,6 +540,15 @@ void initialize_gm_fence_allocation_bitmaps(struct pgt_device *pdev)
 	ASSERT(gm_sz(pdev) % SIZE_1MB == 0);
 	ASSERT(phys_aperture_sz(pdev) <= gm_sz(pdev) && gm_sz(pdev) <= info->max_gtt_gm_sz);
 	ASSERT(info->max_gtt_gm_sz <= VGT_MAX_GM_SIZE);
+
+	for (i = 0; i < VGT_HIGHGM_SLOT_MAX_NUM; i++) {
+		struct hidden_gm_slot *slot =
+			hidden_gm_slotidx_to_slot(pdev, i);
+
+		slot->current_vgpu_num = 0;
+		slot->owner = NULL;
+		slot->max_vgpu_num = VGT_MAX_VMS;
+	}
 
 	// mark the non-available space as non-available.
 	if (gm_sz(pdev) < info->max_gtt_gm_sz)

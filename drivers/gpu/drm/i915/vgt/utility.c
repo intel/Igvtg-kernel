@@ -128,6 +128,14 @@ void execlist_show_ring_debug(struct pgt_device *pdev, int ring_id)
 {
 	int i;
 
+	/*
+	* the time-consuming debug dump information with lock held
+	* will block other VMs running and trigger other VMs TDR.
+	* disable it in reset path.
+	*/
+	if (enable_reset)
+		return;
+
 	for (i = 0; i < VGT_MAX_VMS; i++) {
 		struct vgt_device *vgt;
 
@@ -486,6 +494,14 @@ void execlist_show_ring_buffer(struct pgt_device *pdev, int ring_id, int bytes)
 	val &= ~0xfff;
 
 	printk("....LRCA: %lx.\n", val);
+
+	/*
+	* the time-consuming debug dump information with lock held
+	* will block other VMs running and trigger other VMs TDR.
+	* disable it in reset path.
+	*/
+	if (enable_reset)
+		return;
 
 	if (!val)
 		return;
@@ -851,13 +867,15 @@ void vgt_clear_gtt(struct vgt_device *vgt)
 	index = vgt_visible_gm_base(vgt) >> PAGE_SHIFT;
 	num_entries = vgt_aperture_sz(vgt) >> PAGE_SHIFT;
 	for (offset = 0; offset < num_entries; offset++){
-		ops->set_entry(NULL, &pdev->dummy_gtt_entry, index+offset, false, NULL);
+		ops->set_entry(NULL, &pdev->dummy_gtt_entry,
+			index + offset, false, vgt);
 	}
 
 	index = vgt_hidden_gm_base(vgt) >> PAGE_SHIFT;
 	num_entries = vgt_hidden_gm_sz(vgt) >> PAGE_SHIFT;
 	for (offset = 0; offset < num_entries; offset++){
-		ops->set_entry(NULL, &pdev->dummy_gtt_entry, index+offset, false, NULL);
+		ops->set_entry(NULL, &pdev->dummy_gtt_entry,
+			index + offset, false, vgt);
 	}
 }
 
@@ -1429,6 +1447,14 @@ static void dump_el_queue(struct vgt_device *vgt, int ring_id)
 void dump_el_status(struct pgt_device *pdev)
 {
 	enum vgt_ring_id ring_id;
+
+	/*
+	* the time-consuming debug dump information with lock held
+	* will block other VMs running and trigger other VMs TDR.
+	* disable it in reset path.
+	*/
+	if (enable_reset)
+		return;
 
 	for (ring_id = RING_BUFFER_RCS; ring_id < MAX_ENGINES; ++ ring_id) {
 		int i;

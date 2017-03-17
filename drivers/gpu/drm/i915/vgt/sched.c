@@ -201,8 +201,14 @@ static struct vgt_device *tbs_next_vgt(
 		return pdev->next_sched_vgt;
 
 	next_vgt = vgt_longest_unsched(head);
-	if (next_vgt)
+	if (next_vgt) {
+		/* Move the longest unsched guest after current guest to
+		 * keep fairness round-robin.
+		 */
+		list_del(&next_vgt->list);
+		list_add(&next_vgt->list, &cur_vgt->list);
 		return next_vgt;
+	}
 
 	return vgt_pickup_next(head, cur_vgt);
 }

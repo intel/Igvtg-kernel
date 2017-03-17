@@ -2958,9 +2958,9 @@ struct vm_struct * xen_remap_domain_mfn_range_in_kernel(unsigned long mfn,
 	addr = (unsigned long)area->addr;
 
 	prot = __pgprot(pgprot_val(PAGE_KERNEL));
-
 	rmd.mfn = &mfn;
 	rmd.prot = prot;
+	rmd.contiguous = true;
 
 	while (nr) {
 		batch = min(REMAP_BATCH_SIZE, nr);
@@ -2989,8 +2989,7 @@ void xen_unmap_domain_mfn_range_in_kernel(struct vm_struct *area, int nr,
 		unsigned domid)
 {
 	struct remap_data rmd;
-	struct mmu_update mmu_update[REMAP_BATCH_SIZE];
-	int batch;
+	struct mmu_update mmu_update;
 	unsigned long range, addr = (unsigned long)area->addr;
 #define INVALID_MFN (~0UL)
 	unsigned long invalid_mfn = INVALID_MFN;
@@ -2998,20 +2997,19 @@ void xen_unmap_domain_mfn_range_in_kernel(struct vm_struct *area, int nr,
 
 	WARN_ON(in_interrupt() || irqs_disabled());
 
-	rmd.mfn = &invalid_mfn;
 	rmd.prot = PAGE_NONE;
 
 	while (nr) {
-		batch = min(REMAP_BATCH_SIZE, nr);
-		range = (unsigned long)batch << PAGE_SHIFT;
+		range = (unsigned long)(1 << PAGE_SHIFT);
 
-		rmd.mmu_update = mmu_update;
+		rmd.mfn = &invalid_mfn;
+		rmd.mmu_update = &mmu_update;
 		err = apply_to_page_range(&init_mm, addr, range,
 					  remap_area_mfn_pte_fn, &rmd);
 		BUG_ON(err);
-		BUG_ON(HYPERVISOR_mmu_update(mmu_update, batch, NULL, domid) < 0);
+		BUG_ON(HYPERVISOR_mmu_update(&mmu_update, 1, NULL, domid) < 0);
 
-		nr -= batch;
+		nr--;
 		addr += range;
 	}
 

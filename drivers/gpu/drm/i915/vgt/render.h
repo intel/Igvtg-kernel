@@ -138,6 +138,7 @@ typedef struct {
 	int csb_write_ptr;
 	bool csb_has_update;
 
+	uint64_t request_irq;
 	struct execlist_context *el_ctx;
 } vgt_state_ring_t;
 

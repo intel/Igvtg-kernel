@@ -143,6 +143,10 @@ struct fb_notify_msg {
 int vgt_decode_fb_format(int vmid, struct vgt_fb_format *fb);
 
 /*
+ * read ptes from GGTT
+ */
+u64 vgt_read_ggtt_pte(u32 vmid, u32 index);
+/*
  * Register callback to get notification of frame buffer changes
  * "struct fb_notify_msg" will be the argument to the call back
  * function, from which user could get the changed frame buffer

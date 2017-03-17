@@ -1512,6 +1512,7 @@ void vgt_debugfs_symlink_module_param(void)
 	VGT_CREATE_SYMLINK_FOR_MODULE_PARAM(vgt_cmd_audit, runtime_dir_entry, vgt_cmd_audit);
 	VGT_CREATE_SYMLINK_FOR_MODULE_PARAM(vgt_hold_forcewake, runtime_dir_entry, vgt_hold_forcewake);
 	VGT_CREATE_SYMLINK_FOR_MODULE_PARAM(logd_enable, runtime_dir_entry, logd_enable);
+	VGT_CREATE_SYMLINK_FOR_MODULE_PARAM(hang_threshold, runtime_dir_entry, hang_threshold);
 }
 
 /* debugfs_remove_recursive has no return value, this fuction

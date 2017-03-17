@@ -940,11 +940,13 @@ static int vgt_create_shadow_pages(struct vgt_device *vgt, struct execlist_conte
 			el_ctx->shadow_entry_backup[i].pdev = vgt->pdev;
 			el_ctx->shadow_entry_backup[i].type = GTT_TYPE_GGTT_PTE;
 			ops->get_entry(NULL, &el_ctx->shadow_entry_backup[i],
-				s_gma >> GTT_PAGE_SHIFT, false, NULL);
+				s_gma >> GTT_PAGE_SHIFT, false, vgt);
 			gtt_entry.pdev = vgt->pdev;
 			gtt_entry.type = GTT_TYPE_GGTT_PTE;
-			ops->get_entry(NULL, &gtt_entry, g_gma >> GTT_PAGE_SHIFT, false, NULL);
-			ops->set_entry(NULL, &gtt_entry, s_gma >> GTT_PAGE_SHIFT, false, NULL);
+			ops->get_entry(NULL, &gtt_entry,
+				g_gma >> GTT_PAGE_SHIFT, false, vgt);
+			ops->set_entry(NULL, &gtt_entry,
+				s_gma >> GTT_PAGE_SHIFT, false, vgt);
 		} else {
 			p_shadow->page = aperture_page(vgt->pdev, rsvd_pages_idx);
 			p_shadow->vaddr = page_address(p_shadow->page);
@@ -974,7 +976,7 @@ static void vgt_destroy_shadow_pages(struct vgt_device *vgt, struct execlist_con
 		if ((shadow_execlist_context == OPT_LAZY_CTX_SHADOW) &&
 			(i != 1)) {
 			ops->set_entry(NULL, &el_ctx->shadow_entry_backup[i],
-						 el_ctx->shadow_lrca + i, false, NULL);
+				el_ctx->shadow_lrca + i, false, vgt);
 		}
 	}
 
@@ -1439,6 +1441,7 @@ static void vgt_emulate_context_status_change(struct vgt_device *vgt,
 	struct execlist_context *el_ctx = NULL;
 	uint32_t ctx_id = ctx_status->context_id;
 	bool lite_restore;
+	struct vgt_mm *mm;
 
 	ring_state = &vgt->rb[ring_id];
 	vgt_el_slots_find_submitted_ctx(ring_state, ctx_id,
@@ -1478,6 +1481,19 @@ static void vgt_emulate_context_status_change(struct vgt_device *vgt,
 		trace_ctx_lifecycle(vgt->vm_id, ring_id,
 			el_ctx->guest_context.lrca,
 			str);
+
+		/*
+		* if the ppgtt table is pending release and the ctx_ref_cnt is
+		* 0, we will destroy this ppgtt mm.
+		*/
+		mm = el_ctx->ppgtt_mm;
+		if ((atomic_read(&mm->refcount) == 0) && el_ctx->lazy) {
+			el_ctx->lazy = false;
+			vgt_destroy_mm(mm);
+			vgt_info("VM(%d):lrca 0x%x lazyctx in delete\n",
+					vgt->vm_id,
+					el_ctx->guest_context.lrca);
+		}
 
 		if (!lite_restore) {
 			el_ctx->scan_head_valid = false;
@@ -2485,7 +2501,8 @@ bool vgt_g2v_execlist_context_destroy(struct vgt_device *vgt)
 		vgt_warn("VM-%d: A context destroy request is received "
 			" but the context is not found!\n"
 			"The request will be ignored.\n", vgt->vm_id);
-		dump_ctx_desc(vgt, &ctx_desc);
+		if (!enable_reset)
+			dump_ctx_desc(vgt, &ctx_desc);
 		return rc;
 	}
 

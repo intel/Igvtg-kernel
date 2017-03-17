@@ -968,11 +968,16 @@ static ssize_t start_store(struct kobject *kobj, struct kobj_attribute *attr,
 	bool ret = false;
 
 	mutex_lock(&vgt_sysfs_lock);
-	if (strncmp("0", buf, 1) == 0)
+	if (strncmp("0", buf, 1) == 0) {
 		ret = vgt_render_remove_from_schedule(vgt);
-	else if (strncmp("1", buf, 1) == 0)
-		ret = vgt_render_add_to_schedule(vgt);
+		/* process hypervisor related tasks before migration */
+		hypervisor_hvm_pre_migrate(vgt);
+	} else if (strncmp("1", buf, 1) == 0) {
+		/* process hypervisor related tasks after migration */
+		hypervisor_hvm_post_migrate(vgt);
 
+		ret = vgt_render_add_to_schedule(vgt);
+	}
 	vgt_info("%s vGPU for VM%d %s\n", buf, vgt->vm_id, ret ?
 		"succeed":"failed");
 	mutex_unlock(&vgt_sysfs_lock);

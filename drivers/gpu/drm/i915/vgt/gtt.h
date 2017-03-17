@@ -187,10 +187,10 @@ extern gtt_entry_t *vgt_mm_set_entry(struct vgt_mm *mm,
 	vgt_mm_set_entry(mm, mm->virtual_page_table, e, index)
 
 #define ggtt_get_shadow_entry(mm, e, index) \
-	vgt_mm_get_entry(mm, mm->shadow_page_table, e, index)
+	vgt_mm_get_entry(mm, NULL, e, index)
 
 #define ggtt_set_shadow_entry(mm, e, index) \
-	vgt_mm_set_entry(mm, mm->shadow_page_table, e, index)
+	vgt_mm_set_entry(mm, NULL, e, index)
 
 #define ppgtt_get_guest_root_entry(mm, e, index) \
 	vgt_mm_get_entry(mm, mm->virtual_page_table, e, index)
@@ -233,6 +233,7 @@ struct vgt_vgtt_info {
 
 extern bool vgt_init_vgtt(struct vgt_device *vgt);
 extern void vgt_clean_vgtt(struct vgt_device *vgt);
+extern void vgt_clean_ppgtt(struct vgt_device *vgt);
 
 extern bool vgt_gtt_init(struct pgt_device *pdev);
 extern void vgt_gtt_clean(struct pgt_device *pdev);

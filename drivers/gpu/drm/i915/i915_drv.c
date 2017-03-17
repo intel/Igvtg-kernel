@@ -571,6 +571,10 @@ void intel_detect_pch(struct drm_device *dev)
 				DRM_DEBUG_KMS("Found SunrisePoint LP PCH\n");
 				WARN_ON(!IS_SKYLAKE(dev) &&
 					!IS_KABYLAKE(dev));
+			} else if (id == INTEL_PCH_KBP_DEVICE_ID_TYPE) {
+				dev_priv->pch_type = PCH_KBP;
+				DRM_DEBUG_KMS("Found KabyPoint PCH\n");
+				WARN_ON(!IS_KABYLAKE(dev));
 			} else if (id == INTEL_PCH_P2X_DEVICE_ID_TYPE) {
 				dev_priv->pch_type = intel_virt_detect_pch(dev);
 			} else

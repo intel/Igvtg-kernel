@@ -168,4 +168,20 @@ static inline bool hypervisor_write_va(struct vgt_device *vgt, void *va,
 	return ret;
 }
 
+static inline bool hypervisor_hvm_pre_migrate(struct vgt_device *vgt)
+{
+	if (vgt->vm_id != 0 && vgt_pkdm && vgt_pkdm->pre_migrate)
+		return vgt_pkdm->pre_migrate(vgt);
+
+	return false;
+}
+
+static inline bool hypervisor_hvm_post_migrate(struct vgt_device *vgt)
+{
+	if (vgt->vm_id != 0 && vgt_pkdm && vgt_pkdm->post_migrate)
+		return vgt_pkdm->post_migrate(vgt);
+
+	return false;
+}
+
 #endif /* _VGT_MPT_H_ */

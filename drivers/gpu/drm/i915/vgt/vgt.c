@@ -178,6 +178,9 @@ module_param_named(enable_panel_fitting, enable_panel_fitting, bool, 0600);
 bool enable_reset = true;
 module_param_named(enable_reset, enable_reset, bool, 0600);
 
+int hang_threshold = 200;
+module_param_named(hang_threshold, hang_threshold, int, 0600);
+
 /* possible value of preemption_policy:
  * 0: (default) pre-emption and lite-restore are enabled.
  * 1: pre-emption disabled, lite-restore enabled.
@@ -302,7 +305,7 @@ struct pci_dev *pgt_to_pci(struct pgt_device *pdev)
  * vreg/sreg/ hwreg. In the future we can futher tune this part on
  * a necessary base.
  */
-static void vgt_processe_lo_priority_request(struct pgt_device *pdev)
+static void vgt_process_lo_priority_request(struct pgt_device *pdev)
 {
 	int cpu;
 
@@ -355,7 +358,7 @@ static void vgt_processe_lo_priority_request(struct pgt_device *pdev)
 	return;
 }
 
-static void vgt_processe_hi_priority_request(struct pgt_device *pdev)
+static void vgt_process_hi_priority_request(struct pgt_device *pdev)
 {
 	int cpu;
 	enum vgt_ring_id ring_id;
@@ -464,11 +467,11 @@ static int vgt_thread(void *priv)
 
 		do {
 			/* give another chance for high priority request */
-			vgt_processe_hi_priority_request(pdev);
+			vgt_process_hi_priority_request(pdev);
 		}
 		while(REQUEST_LOOP(pdev));
 
-		vgt_processe_lo_priority_request(pdev);
+		vgt_process_lo_priority_request(pdev);
 	}
 	return 0;
 }
@@ -714,7 +717,7 @@ static bool vgt_initialize_device_info(struct pgt_device *pdev)
 		info->gtt_entry_size_shift = 3;
 		info->gmadr_bytes_in_cmd = 8;
 		info->max_surface_size = 36 * SIZE_1MB;
-		info->max_support_vms = 8;
+		info->max_support_vms = 16;
 	}
 
 	ASSERT(info->max_support_vms <= VGT_MAX_VMS);
@@ -1455,6 +1458,83 @@ int vgt_reset_device(struct pgt_device *pdev)
 			ier_reg, ier_value);
 
 	return 0;
+}
+
+static int ring_id_to_gpu_reset_bit(int ring_id)
+{
+	int reset_bit = 0;
+
+	switch (ring_id) {
+	case RING_BUFFER_RCS:
+		reset_bit = GEN6_GRDOM_RENDER;
+		break;
+
+	case RING_BUFFER_BCS:
+		reset_bit = GEN6_GRDOM_BLT;
+		break;
+
+	case RING_BUFFER_VCS:
+		reset_bit = GEN6_GRDOM_MEDIA;
+		break;
+
+	case RING_BUFFER_VECS:
+		reset_bit = GEN6_GRDOM_VECS;
+		break;
+
+	case RING_BUFFER_VCS2:
+		reset_bit = GEN8_GRDOM_MEDIA2;
+		break;
+
+	default:
+		vgt_err("Unexpected engine: %d\n", ring_id);
+		break;
+	}
+
+	return reset_bit;
+}
+
+bool vgt_do_engine_reset(struct pgt_device *pdev, int ring_id)
+{
+	bool ret = true;
+	int count = 0;
+
+	VGT_MMIO_WRITE(pdev, RING_RESET_CTL(vgt_ring_id_to_EL_base(ring_id)),
+					(1 << 16) | (1 << 0));
+
+	for (count = 1000; count > 0; count--)
+		if (VGT_MMIO_READ(pdev,
+			RING_RESET_CTL(vgt_ring_id_to_EL_base(ring_id)))
+				& (1 << 1))
+			break;
+
+	if (!count) {
+		vgt_err("wait ring_reset_ctl %d timeout.\n",
+			RING_RESET_CTL(vgt_ring_id_to_EL_base(ring_id)));
+		goto not_ready;
+	}
+
+	VGT_MMIO_WRITE(pdev, GEN6_GDRST, ring_id_to_gpu_reset_bit(ring_id));
+
+	for (count = 1000; count > 0; count--)
+		if (!(VGT_MMIO_READ(pdev, GEN6_GDRST) &
+			ring_id_to_gpu_reset_bit(ring_id)))
+			break;
+
+	if (!count) {
+		vgt_err("wait gdrst timeout.\n");
+		goto error;
+	}
+
+	return ret;
+
+not_ready:
+	VGT_MMIO_WRITE(pdev, RING_RESET_CTL(vgt_ring_id_to_EL_base(ring_id)),
+							(1 << 16) | (0 << 0));
+
+error:
+	ret = false;
+	return ret;
+
 }
 
 static void vgt_param_check(void)

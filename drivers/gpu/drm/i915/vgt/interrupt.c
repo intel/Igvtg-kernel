@@ -31,6 +31,8 @@
 #include <linux/list.h>
 
 #include "vgt.h"
+#include "trace.h"
+
 
 /*
  * TODO:
@@ -685,6 +687,7 @@ static bool process_irq(struct vgt_irq_host_state *hstate,
 	u32 val;
 	u32 reg;
 	int count = 0;
+	char str[64];
 
 	if (info->group == IRQ_INFO_MASTER)
 		reg = info->reg_base;
@@ -694,6 +697,11 @@ static bool process_irq(struct vgt_irq_host_state *hstate,
 	val = VGT_MMIO_READ(pdev, reg);
 	if (!val)
 		return false;
+
+	snprintf(str, 64, "physical irq received:"
+			"reg 0x%x,val 0x%x, rdr owner:VM%d\n",
+			 reg, val, current_render_owner(pdev)->vm_id);
+	trace_irq_lifecycle(str);
 
 	vgt_handle_events(hstate, &val, info);
 
@@ -1039,9 +1047,14 @@ static void vgt_propagate_event(struct vgt_irq_host_state *hstate,
          * TODO: need check 2nd level IMR for render events
          */
 	if (!test_bit(bit, (void*)vgt_vreg(vgt, regbase_to_imr(reg_base)))) {
+		char str[128];
 		vgt_dbg(VGT_DBG_IRQ, "IRQ: set bit (%d) for (%s) for VM (%d)\n",
 			bit, vgt_irq_name[event], vgt->vm_id);
 		set_bit(bit, (void*)vgt_vreg(vgt, regbase_to_iir(reg_base)));
+
+		snprintf(str, 128, "virtual set_bit 0x%x for (%s) to VM%d\n",
+				 bit, vgt_irq_name[event], vgt->vm_id);
+			trace_irq_lifecycle(str);
 	}
 }
 
@@ -1814,6 +1827,7 @@ void vgt_forward_events(struct pgt_device *pdev)
 	vgt_event_virt_handler_t handler;
 	struct vgt_irq_ops *ops = vgt_get_irq_ops(pdev);
 	enum vgt_event_type virtual_event;
+	char str[128];
 
 	/* WARING: this should be under lock protection */
 	//raise_ctx_sched(vgt_dom0);
@@ -1855,6 +1869,13 @@ void vgt_forward_events(struct pgt_device *pdev)
 		default:
 			break;
 		}
+
+		snprintf(str, 128, "v_handler %s,policy %d :VM%d\n",
+			 vgt_irq_name[event],
+			 vgt_get_event_policy(hstate, event),
+			 current_render_owner(pdev)->vm_id);
+		trace_irq_lifecycle(str);
+
 	}
 
 	for (i = 0; i < VGT_MAX_VMS; i++) {
@@ -1940,6 +1961,7 @@ static void vgt_handle_events(struct vgt_irq_host_state *hstate, void *iir,
 	enum vgt_event_type event;
 	vgt_event_phys_handler_t handler;
 	struct pgt_device *pdev = hstate->pdev;
+	char str[128];
 
 	ASSERT(spin_is_locked(&pdev->irq_lock));
 
@@ -1964,6 +1986,11 @@ static void vgt_handle_events(struct vgt_irq_host_state *hstate, void *iir,
 
 		handler(hstate, event);
 		set_bit(event, hstate->pending_events);
+
+		snprintf(str, 128, "pending %s event, rdr owner:VM%d\n",
+			 vgt_irq_name[event],
+			 current_render_owner(pdev)->vm_id);
+		trace_irq_lifecycle(str);
 	}
 }
 
